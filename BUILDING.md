@@ -5,7 +5,7 @@ This tree is a starting point for a **source build**, not a tested ROM release. 
 ## Repositories pinned for this project
 
 - Device tree: `isabe8499-oss/device_motorola_deen-22`, branch `lineage-19.1`
-- Kernel: `isabe8499-oss/kernel_motorola_msm8953-22`, branch `4.19.325-WIP`
+- Kernel: `isabe8499-oss/kernel_motorola_msm8953-22`, branch `bakasu-susfs23-deen`
 - Vendor tree: `Vhmit/vendor_motorola_deen`, branch `lineage-19.1`
 
 ## 1. Prepare LineageOS source
@@ -27,7 +27,7 @@ cat > .repo/local_manifests/deen.xml <<'EOF'
   <project name="isabe8499-oss/kernel_motorola_msm8953-22"
            path="kernel/motorola/msm8953"
            remote="github-user"
-           revision="4.19.325-WIP" />
+           revision="bakasu-susfs23-deen" />
 </manifest>
 EOF
 repo sync -c --no-clone-bundle --no-tags -j"$(nproc --all)"
@@ -51,10 +51,9 @@ The device configuration expects a **prebuilt** `Image.gz-dtb` at `device/motoro
 ```bash
 cd kernel/motorola/msm8953
 bash -n build.sh
-# Review the kernel's build.sh options and choose the intended KSU/SUSFS configuration.
-# The current -ksu path in build.sh explicitly disables CONFIG_KSU_SUSFS;
-# do not use it blindly if this ROM must retain SUSFS.
-printf 'y\n' | ./build.sh deen
+# This branch applies the pinned SUSFS 2.3.0 patches and enables NoMount v2.2.0.
+# -ksu enables BakaSU + SUSFS; the "y" answer exports UAPI headers.
+printf 'y\n' | ./build.sh deen -ksu
 cd ~/android/lineage-deen
 bash device/motorola/deen/scripts/stage-kernel.sh kernel/motorola/msm8953
 ```
@@ -76,6 +75,6 @@ This is the expected build invocation for the product definition, not a claim th
 
 ## Current validation boundary
 
-The workflow `.github/workflows/deen-lineage19-preflight.yml` checks device identifiers, boot-image metadata, shell syntax, vendor branch availability, and the kernel defconfig. It is a **preflight check only**; it does not compile Android, validate proprietary ABI compatibility, or prove that the device boots.
+The workflow `.github/workflows/deen-lineage19-preflight.yml` checks device identifiers, boot-image metadata, shell syntax, vendor branch availability, Linux 4.19.325, the NoMount configuration, and the SUSFS patch/configuration inputs. It is a **preflight check only**; it does not compile Android, validate proprietary ABI compatibility, or prove that the device boots.
 
 Before flashing any image, verify partition layout, boot image/DTB packaging, vendor interfaces, SELinux denials, kernel modules and runtime logs. Keep a known-good boot/recovery image available.
