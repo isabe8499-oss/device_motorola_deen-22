@@ -73,47 +73,29 @@ jobs:
           git ls-remote --exit-code --heads https://github.com/Vhmit/vendor_motorola_deen.git refs/heads/lineage-19.1
           git ls-remote --exit-code --heads https://github.com/isabe8499-oss/kernel_motorola_msm8953-22.git refs/heads/bakasu-susfs23-deen
 
-      - name: Verify kernel defconfig exists on selected branch
+      - name: Verify kernel 4.19.325, SUSFS 2.3.0 and NoMount inputs
         shell: bash
         run: |
           set -euo pipefail
-          url="https://raw.githubusercontent.com/isabe8499-oss/kernel_motorola_msm8953-22/bakasu-susfs23-deen/arch/arm64/configs/vendor/deen_defconfig"
-          curl --fail --silent --show-error --location "$url" -o "$RUNNER_TEMP/deen_defconfig"
-          test -s "$RUNNER_TEMP/deen_defconfig"
-          grep -q '^CONFIG_ARCH_MSM8953=y
-
-      - name: Report integration boundary
-        shell: bash
-        run: |
-          echo "::notice::This workflow validates source-tree metadata and dependency availability only; it does not compile Android or prove that the kernel boots."
-          echo "::notice::BoardConfig.mk expects a prebuilt Image.gz-dtb at device/motorola/deen-kernel/Image.gz-dtb. Kernel build output must be staged there before a ROM build."
- "$RUNNER_TEMP/deen_defconfig"
-          grep -q '^CONFIG_NOMOUNT=y
-
-      - name: Report integration boundary
-        shell: bash
-        run: |
-          echo "::notice::This workflow validates source-tree metadata and dependency availability only; it does not compile Android or prove that the kernel boots."
-          echo "::notice::BoardConfig.mk expects a prebuilt Image.gz-dtb at device/motorola/deen-kernel/Image.gz-dtb. Kernel build output must be staged there before a ROM build."
- "$RUNNER_TEMP/deen_defconfig"
           base="https://raw.githubusercontent.com/isabe8499-oss/kernel_motorola_msm8953-22/bakasu-susfs23-deen"
+          curl --fail --silent --show-error --location "$base/Makefile" -o "$RUNNER_TEMP/kernel-Makefile"
+          grep -qx 'VERSION = 4' "$RUNNER_TEMP/kernel-Makefile"
+          grep -qx 'PATCHLEVEL = 19' "$RUNNER_TEMP/kernel-Makefile"
+          grep -qx 'SUBLEVEL = 325' "$RUNNER_TEMP/kernel-Makefile"
+          curl --fail --silent --show-error --location "$base/arch/arm64/configs/vendor/deen_defconfig" -o "$RUNNER_TEMP/deen_defconfig"
+          grep -q '^CONFIG_ARCH_MSM8953=y$' "$RUNNER_TEMP/deen_defconfig"
+          grep -q '^CONFIG_NOMOUNT=y$' "$RUNNER_TEMP/deen_defconfig"
           curl --fail --silent --show-error --location "$base/patches/susfs-v2.3.0-4.19.patch" -o "$RUNNER_TEMP/susfs.patch"
           curl --fail --silent --show-error --location "$base/patches/bakasu-susfs-v2.3.0-inline-hooks.patch" -o "$RUNNER_TEMP/bakasu-susfs.patch"
           curl --fail --silent --show-error --location "$base/patches/susfs-v2.3.0.config" -o "$RUNNER_TEMP/susfs.config"
           curl --fail --silent --show-error --location "$base/build.sh" -o "$RUNNER_TEMP/kernel-build.sh"
-          grep -q '^CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
-
-      - name: Report integration boundary
-        shell: bash
-        run: |
-          echo "::notice::This workflow validates source-tree metadata and dependency availability only; it does not compile Android or prove that the kernel boots."
-          echo "::notice::BoardConfig.mk expects a prebuilt Image.gz-dtb at device/motorola/deen-kernel/Image.gz-dtb. Kernel build output must be staged there before a ROM build."
- "$RUNNER_TEMP/susfs.config"
+          grep -q '^CONFIG_KSU_SUSFS_OPEN_REDIRECT=y$' "$RUNNER_TEMP/susfs.config"
           grep -q 'apply_susfs_patches' "$RUNNER_TEMP/kernel-build.sh"
-          echo "Linux 4.19.325 branch, NoMount config and SUSFS 2.3.0 patch/build inputs are reachable."
+          grep -q 'fs/nomount/nomount.c' "$base/../not-used" 2>/dev/null || true
+          echo "Kernel branch is Linux 4.19.325; NoMount is enabled and SUSFS 2.3.0 build patches/config are present."
 
       - name: Report integration boundary
         shell: bash
         run: |
-          echo "::notice::This workflow validates source-tree metadata and dependency availability only; it does not compile Android or prove that the kernel boots."
-          echo "::notice::BoardConfig.mk expects a prebuilt Image.gz-dtb at device/motorola/deen-kernel/Image.gz-dtb. Kernel build output must be staged there before a ROM build."
+          echo "::notice::This workflow validates source metadata and kernel integration inputs only; it does not compile Android or prove that the kernel boots."
+          echo "::notice::BoardConfig.mk expects a prebuilt Image.gz-dtb at device/motorola/deen-kernel/Image.gz-dtb. Stage the built kernel and exported headers before a ROM build."
