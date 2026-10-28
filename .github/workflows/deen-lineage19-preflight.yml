@@ -91,7 +91,8 @@ jobs:
           curl --fail --silent --show-error --location "$base/build.sh" -o "$RUNNER_TEMP/kernel-build.sh"
           grep -q '^CONFIG_KSU_SUSFS_OPEN_REDIRECT=y$' "$RUNNER_TEMP/susfs.config"
           grep -q 'apply_susfs_patches' "$RUNNER_TEMP/kernel-build.sh"
-          grep -q 'fs/nomount/nomount.c' "$base/../not-used" 2>/dev/null || true
+          curl --fail --silent --show-error --location "$base/fs/nomount/nomount.h" -o "$RUNNER_TEMP/nomount.h"
+          grep -q 'NOMOUNT_BASE_VERSION "22"' "$RUNNER_TEMP/nomount.h"
           echo "Kernel branch is Linux 4.19.325; NoMount is enabled and SUSFS 2.3.0 build patches/config are present."
 
       - name: Report integration boundary
