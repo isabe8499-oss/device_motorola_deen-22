@@ -44,6 +44,7 @@ jobs:
           grep -q 'LOCAL_KERNEL := device/motorola/deen-kernel/Image.gz-dtb' device.mk
           bash -n extract-files.sh
           bash -n setup-makefiles.sh
+          bash -n scripts/stage-kernel.sh
           echo "Device identity, legacy boot-image settings and extraction scripts passed static checks."
 
       - name: Validate dependency manifest
