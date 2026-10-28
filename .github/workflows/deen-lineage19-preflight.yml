@@ -13,6 +13,7 @@ on:
       - 'lineage.dependencies'
       - 'extract-files.sh'
       - 'setup-makefiles.sh'
+      - 'scripts/stage-kernel.sh'
       - '.github/workflows/deen-lineage19-preflight.yml'
   pull_request:
     branches:
@@ -29,8 +30,6 @@ jobs:
     steps:
       - name: Checkout device tree
         uses: actions/checkout@v4
-        with:
-          ref: lineage-19.1
 
       - name: Validate device product and boot configuration
         shell: bash
