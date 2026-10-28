@@ -1,0 +1,7 @@
+[
+  {
+    "repository": "Vhmit/vendor_motorola_deen",
+    "target_path": "vendor/motorola/deen",
+    "branch": "lineage-19.1"
+  }
+]
