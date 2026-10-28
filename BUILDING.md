@@ -58,7 +58,7 @@ cd ~/android/lineage-deen
 bash device/motorola/deen/scripts/stage-kernel.sh kernel/motorola/msm8953
 ```
 
-The `y` answer requests exported kernel headers. If you need BakaSU/KernelSU and SUSFS together, first correct and validate the kernel build configuration so the selected build does not silently disable a required feature. Verify the resulting kernel config and image before staging.
+The kernel workflow also uploads the exported headers as an artifact. Verify the active `out/.config` includes `CONFIG_KSU_SUSFS=y`, `CONFIG_KSU_SUSFS_OPEN_REDIRECT=y`, and `CONFIG_NOMOUNT=y` before staging; the build workflow checks these settings.
 
 ## 3. Build the ROM
 
