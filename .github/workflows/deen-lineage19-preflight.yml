@@ -62,6 +62,7 @@ jobs:
           assert len(vendor) == 1, "Expected exactly one vendor/motorola/deen dependency"
           assert vendor[0].get("repository") == "Vhmit/vendor_motorola_deen"
           assert vendor[0].get("branch") == "lineage-19.1"
+          assert vendor[0].get("remote") == "github-user"
           print("Vendor dependency manifest is valid.")
           PY
 
