@@ -1,0 +1,89 @@
+name: Deen LineageOS 19.1 Preflight
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - lineage-19.1
+    paths:
+      - 'BoardConfig.mk'
+      - 'AndroidProducts.mk'
+      - 'device.mk'
+      - 'lineage_deen.mk'
+      - 'lineage.dependencies'
+      - 'extract-files.sh'
+      - 'setup-makefiles.sh'
+      - '.github/workflows/deen-lineage19-preflight.yml'
+  pull_request:
+    branches:
+      - lineage-19.1
+
+permissions:
+  contents: read
+
+jobs:
+  preflight:
+    name: Validate Deen source dependencies
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout device tree
+        uses: actions/checkout@v4
+        with:
+          ref: lineage-19.1
+
+      - name: Validate device product and boot configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -q '^PRODUCT_DEVICE := deen$' lineage_deen.mk
+          grep -q '^PRODUCT_NAME := lineage_deen$' lineage_deen.mk
+          grep -q '^TARGET_BOARD_PLATFORM := msm8953$' BoardConfig.mk
+          grep -q '^BOARD_KERNEL_IMAGE_NAME := Image.gz-dtb$' BoardConfig.mk
+          grep -q '^BOARD_BOOT_HEADER_VERSION := 1$' BoardConfig.mk
+          grep -q 'LOCAL_KERNEL := device/motorola/deen-kernel/Image.gz-dtb' device.mk
+          bash -n extract-files.sh
+          bash -n setup-makefiles.sh
+          echo "Device identity, legacy boot-image settings and extraction scripts passed static checks."
+
+      - name: Validate dependency manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          deps = json.loads(Path("lineage.dependencies").read_text())
+          vendor = [
+              item for item in deps
+              if item.get("target_path") == "vendor/motorola/deen"
+          ]
+          assert len(vendor) == 1, "Expected exactly one vendor/motorola/deen dependency"
+          assert vendor[0].get("repository") == "Vhmit/vendor_motorola_deen"
+          assert vendor[0].get("branch") == "lineage-19.1"
+          print("Vendor dependency manifest is valid.")
+          PY
+
+      - name: Verify upstream vendor and custom kernel refs
+        shell: bash
+        run: |
+          set -euo pipefail
+          git ls-remote --exit-code --heads https://github.com/Vhmit/vendor_motorola_deen.git refs/heads/lineage-19.1
+          git ls-remote --exit-code --heads https://github.com/isabe8499-oss/kernel_motorola_msm8953-22.git refs/heads/4.19.325-WIP
+
+      - name: Verify kernel defconfig exists on selected branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          url="https://raw.githubusercontent.com/isabe8499-oss/kernel_motorola_msm8953-22/4.19.325-WIP/arch/arm64/configs/vendor/deen_defconfig"
+          curl --fail --silent --show-error --location "$url" -o "$RUNNER_TEMP/deen_defconfig"
+          test -s "$RUNNER_TEMP/deen_defconfig"
+          grep -q '^CONFIG_ARCH_MSM8953=y$' "$RUNNER_TEMP/deen_defconfig"
+          echo "Kernel branch and Deen defconfig are reachable."
+
+      - name: Report integration boundary
+        shell: bash
+        run: |
+          echo "::notice::This workflow validates source-tree metadata and dependency availability only; it does not compile Android or prove that the kernel boots."
+          echo "::notice::BoardConfig.mk expects a prebuilt Image.gz-dtb at device/motorola/deen-kernel/Image.gz-dtb. Kernel build output must be staged there before a ROM build."
