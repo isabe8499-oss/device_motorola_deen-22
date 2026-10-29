@@ -75,6 +75,41 @@ jobs:
           print("Vendor and kernel dependency manifest is valid.")
           PY
 
+      - name: Validate full ROM build recipe and local manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import re
+          import xml.etree.ElementTree as ET
+          from pathlib import Path
+
+          doc = Path("ROM_BUILD.md").read_text()
+          match = re.search(r"cat > \.repo/local_manifests/deen\.xml <<'XML'\n(.*?)\nXML", doc, re.S)
+          assert match, "Local manifest XML block missing from ROM_BUILD.md"
+          root = ET.fromstring(match.group(1))
+          remotes = {x.get("name"): x.get("fetch") for x in root.findall("remote")}
+          assert remotes.get("deen-github") == "https://github.com/"
+          projects = {x.get("path"): x for x in root.findall("project")}
+          expected = {
+              "device/motorola/deen": ("isabe8499-oss/device_motorola_deen-22", "lineage-19.1"),
+              "vendor/motorola/deen": ("Vhmit/vendor_motorola_deen", "lineage-19.1"),
+              "kernel/motorola/msm8953": ("isabe8499-oss/kernel_motorola_msm8953-22", "bakasu-susfs23-deen"),
+          }
+          for path, (name, revision) in expected.items():
+              p = projects.get(path)
+              assert p is not None, f"Missing manifest project: {path}"
+              assert p.get("name") == name and p.get("revision") == revision, f"Incorrect pin for {path}"
+              assert p.get("remote") == "deen-github", f"Incorrect remote for {path}"
+
+          build = Path("scripts/build-lineage19.sh").read_text()
+          for marker in ("lunch lineage_deen-userdebug", "mka bacon", "CONFIG_KSU_SUSFS_OPEN_REDIRECT=y", "CONFIG_NOMOUNT=y"):
+              assert marker in build, f"ROM build helper is missing required marker: {marker}"
+          stage = Path("scripts/stage-kernel.sh").read_text()
+          assert "Image.gz-dtb" in stage and "kernel-headers" in stage
+          print("Local manifest XML, repository pins, kernel staging, and full-build command validated.")
+          PY
+
       - name: Verify vendor and kernel branches exist
         shell: bash
         run: |
