@@ -26,8 +26,8 @@ PRODUCT_MODEL := motorola one
 
 PRODUCT_GMS_CLIENTID_BASE := android-motorola
 
+# Keep the original product codename for vendor compatibility, but do not
+# force the Android 10 stock build description/fingerprint into this Android 12
+# product. Let the LineageOS 19.1 build system generate the ROM build identity.
 PRODUCT_BUILD_PROP_OVERRIDES += \
-    PRODUCT_NAME=deen \
-    PRIVATE_BUILD_DESC="deen-user 10 QPKS30.54-22-27 92b8a release-keys"
-
-BUILD_FINGERPRINT := motorola/deen/deen_sprout:10/QPKS30.54-22-27/92b8a:user/release-keys
+    PRODUCT_NAME=deen
