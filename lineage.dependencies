@@ -2,8 +2,7 @@
   {
     "repository": "Vhmit/vendor_motorola_deen",
     "target_path": "vendor/motorola/deen",
-    "branch": "lineage-19.1",
-    "remote": "github-user"
+    "branch": "lineage-19.1"
   },
   {
     "repository": "isabe8499-oss/kernel_motorola_msm8953-22",
