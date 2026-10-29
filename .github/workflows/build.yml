@@ -175,12 +175,12 @@ jobs:
           cd "$GITHUB_WORKSPACE/android"
           artifact_dir="$RUNNER_TEMP/deen-kernel-artifact"
           artifact_zip="$RUNNER_TEMP/deen-kernel-artifact.zip"
-          kernel_ref="3c61cdf1f2a670127f9253e35fddb6f481b55e1a"
+          kernel_ref="1f71757e3deb804698c5c827c54a0a46b603f24c"
           mkdir -p "$artifact_dir"
           # Fetch the already verified public Actions artifact without cloning
           # the full 4.19 kernel repository or rebuilding it inside the ROM job.
           curl --fail --location --retry 3 --retry-delay 2 \
-            "https://nightly.link/isabe8499-oss/kernel_motorola_msm8953-22/actions/artifacts/12861102885.zip" \
+            "https://nightly.link/isabe8499-oss/kernel_motorola_msm8953-22/actions/artifacts/12874572755.zip" \
             --output "$artifact_zip"
           unzip -tq "$artifact_zip"
           unzip -q "$artifact_zip" -d "$artifact_dir"
@@ -188,7 +188,7 @@ jobs:
           raw_base="https://raw.githubusercontent.com/isabe8499-oss/kernel_motorola_msm8953-22/$kernel_ref"
           curl --fail --location --retry 3 "$raw_base/include/linux/susfs.h" -o "$artifact_dir/include/linux/susfs.h"
           curl --fail --location --retry 3 "$raw_base/fs/nomount/nomount.h" -o "$artifact_dir/fs/nomount/nomount.h"
-          expected_sha="d11a1238948ee840bbfb2e42a07bd3147c42346ea579131e413241f714b3179a"
+          expected_sha="1ded9b9066d5d6709de25dbf9faa0cbf319ed14a1e4312c642205735788e3d32"
           actual_sha="$(sha256sum "$artifact_dir/out/arch/arm64/boot/Image.gz-dtb" | awk '{print $1}')"
           [[ "$actual_sha" == "$expected_sha" ]] || { echo "::error::Kernel image SHA-256 mismatch: $actual_sha"; exit 1; }
           bash device/motorola/deen/scripts/stage-kernel.sh "$artifact_dir"
