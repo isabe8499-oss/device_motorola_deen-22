@@ -10,7 +10,7 @@
 
 ## Important limitation
 
-The preflight workflow verifies repository references, expected files, configuration markers, and static device-tree settings. It does **not** build the full Android ROM, prove that every kernel config option survives `olddefconfig`, verify DTB/DTBO compatibility, or prove that the resulting boot image starts on physical hardware.
+The preflight workflow verifies repository references, expected files, configuration markers, static device-tree settings, and that a successful, unexpired kernel artifact exists for the exact current HEAD of `bakasu-susfs23-deen`. It does **not** build the full Android ROM, prove that every kernel config option survives `olddefconfig`, verify DTB/DTBO compatibility, or prove that the resulting boot image starts on physical hardware. If the kernel branch advances, run its build workflow successfully before the device-tree preflight can pass again.
 
 ## Kernel image integration
 
