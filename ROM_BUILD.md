@@ -38,7 +38,26 @@ The local manifest defines a separate `deen-github` remote so the owner/reposito
 
 ## Build and stage the kernel
 
-Build the kernel using the repository's documented workflow/script so its generated `out/.config`, `Image.gz-dtb`, and exported UAPI headers are from the same source revision. Then stage the image and headers using the device-tree helper:
+The existing successful kernel workflow is [run 40789837157](https://github.com/isabe8499-oss/kernel_motorola_msm8953-22/actions/runs/40789837157). Its artifact is currently named `deen-susfs23-12` and contains the built kernel image, generated config, and exported headers. The device-tree preflight now refuses to pass if the kernel branch HEAD has no matching successful, unexpired artifact.
+
+You can download that artifact with GitHub CLI from a Linux build host:
+
+```bash
+gh run download 40789837157 \
+  --repo isabe8499-oss/kernel_motorola_msm8953-22 \
+  --name deen-susfs23-12 \
+  --dir /tmp/deen-kernel-artifact
+```
+
+From the Android source root, copy the artifact's generated `out/` tree into the checked-out kernel source. Confirm the downloaded directory contains `out/arch/arm64/boot/Image.gz-dtb`, `out/.config`, and `out/arch/arm64/boot/usr/include` before copying:
+
+```bash
+rsync -a /tmp/deen-kernel-artifact/out/ kernel/motorola/msm8953/out/
+```
+
+If the downloaded artifact has a different directory layout, locate those three exact paths and copy them preserving the `out/` structure. Do not combine an image, config, and headers from different kernel workflow runs.
+
+Then stage the image and headers into the legacy path expected by this device tree:
 
 ```bash
 bash device/motorola/deen/scripts/stage-kernel.sh kernel/motorola/msm8953
