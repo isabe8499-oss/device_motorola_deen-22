@@ -38,8 +38,8 @@ jobs:
       USE_CCACHE: "1"
       CCACHE_EXEC: ccache
       CCACHE_DIR: ${{ github.workspace }}/.ccache
-      CCACHE_MAXSIZE: 20G
-      ANDROID_JOBS: "2"
+      CCACHE_MAXSIZE: 8G
+      ANDROID_JOBS: "4"
 
     steps:
       # Must precede checkout: this action remounts the workspace volume.
@@ -88,7 +88,7 @@ jobs:
             bc bison build-essential ccache curl flex g++-multilib gcc-multilib \
             git git-lfs gnupg gperf imagemagick lib32readline-dev lib32z1-dev \
             libelf-dev liblz4-tool libncurses-dev libssl-dev libxml2 libxml2-utils \
-            lzop pngcrush rsync schedtool squashfs-tools unzip xsltproc zip \
+            lld lzop pahole perl cpio jq pngcrush rsync schedtool squashfs-tools unzip xsltproc zip \
             zlib1g-dev python3 python-is-python3
           git lfs install
 
@@ -157,21 +157,51 @@ jobs:
           set -euo pipefail
           sudo apt-get install -y --no-install-recommends gh
 
-      - name: Stage verified kernel artifact
+      - name: Stage verified kernel artifact or build kernel from source
         shell: bash
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.KERNEL_REPO_TOKEN || github.token }}
         run: |
           set -euo pipefail
           cd "$GITHUB_WORKSPACE/android"
-          gh run download 40789837157 \
-            --repo isabe8499-oss/kernel_motorola_msm8953-22 \
-            --name deen-susfs23-12 \
-            --dir "$RUNNER_TEMP/deen-kernel-artifact"
-          test -s "$RUNNER_TEMP/deen-kernel-artifact/out/arch/arm64/boot/Image.gz-dtb"
-          test -s "$RUNNER_TEMP/deen-kernel-artifact/out/.config"
-          test -d "$RUNNER_TEMP/deen-kernel-artifact/out/arch/arm64/boot/usr/include"
-          rsync -a "$RUNNER_TEMP/deen-kernel-artifact/out/" kernel/motorola/msm8953/out/
+          sudo apt-get install -y --no-install-recommends gh
+          kernel_dir="$GITHUB_WORKSPACE/android/kernel/motorola/msm8953"
+          artifact_dir="$RUNNER_TEMP/deen-kernel-artifact"
+          have_artifact=false
+
+          # A token with Actions: read on the kernel repository can be supplied as
+          # the KERNEL_REPO_TOKEN secret. The built-in GITHUB_TOKEN is repo-scoped;
+          # if cross-repo artifact download is denied, compile the exact synced source.
+          if gh run download 40789837157 \
+              --repo isabe8499-oss/kernel_motorola_msm8953-22 \
+              --name deen-susfs23-12 \
+              --dir "$artifact_dir"; then
+            if [[ -s "$artifact_dir/out/arch/arm64/boot/Image.gz-dtb" ]] && \
+               [[ -s "$artifact_dir/out/.config" ]] && \
+               [[ -d "$artifact_dir/out/arch/arm64/boot/usr/include" ]]; then
+              rsync -a "$artifact_dir/out/" "$kernel_dir/out/"
+              have_artifact=true
+              echo "Using verified prebuilt kernel artifact."
+            else
+              echo "::warning::Kernel artifact downloaded, but expected image/config/headers were not all present; rebuilding kernel."
+            fi
+          else
+            echo "::warning::Could not download the cross-repository kernel artifact; rebuilding from the synchronized kernel source."
+          fi
+
+          if [[ "$have_artifact" != "true" ]]; then
+            cd "$kernel_dir"
+            ksu_sha="$(git ls-remote https://github.com/Baka-SU/BakaSU.git refs/heads/main | awk 'NR==1 {print $1}')"
+            [[ -n "$ksu_sha" ]] || { echo "::error::Could not resolve BakaSU main."; exit 1; }
+            export KSU_DIR="$RUNNER_TEMP/bakasu"
+            export TOOLCHAIN_DIR="$RUNNER_TEMP/clang"
+            export KSU_REF="$ksu_sha"
+            printf 'n\n' | ./build.sh deen -ksu -z
+            make -j"$(nproc --all)" O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 HOSTCFLAGS=-fcommon \
+              INSTALL_HDR_PATH="$PWD/out/arch/arm64/boot/usr" headers_install
+          fi
+
+          cd "$GITHUB_WORKSPACE/android"
           bash device/motorola/deen/scripts/stage-kernel.sh kernel/motorola/msm8953
 
       - name: Build ROM
