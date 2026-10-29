@@ -135,7 +135,6 @@ jobs:
             <remote name="deen-github" fetch="https://github.com/" />
             <project name="isabe8499-oss/device_motorola_deen-22" path="device/motorola/deen" remote="deen-github" revision="lineage-19.1" />
             <project name="Vhmit/vendor_motorola_deen" path="vendor/motorola/deen" remote="deen-github" revision="lineage-19.1" />
-            <project name="isabe8499-oss/kernel_motorola_msm8953-22" path="kernel/motorola/msm8953" remote="deen-github" revision="bakasu-susfs23-deen" />
           </manifest>
           XML
           python3 - <<'PY'
@@ -154,7 +153,14 @@ jobs:
           # device build helper checks named branch labels, so create local labels
           # at the exact commits fetched by repo sync.
           git -C device/motorola/deen switch -C lineage-19.1
-          git -C kernel/motorola/msm8953 switch -C bakasu-susfs23-deen
+          # Clear Git LFS download cache only after repo has materialized its files
+          # in the checked-out source tree; this removes duplicate LFS payloads.
+          echo "Disk before LFS cache cleanup:"
+          df -hT "$GITHUB_WORKSPACE" /
+          find .repo -type d -path '*/lfs/objects' -prune -exec du -sh {} + 2>/dev/null || true
+          find .repo -type d -path '*/lfs/objects' -prune -exec rm -rf {} +
+          echo "Disk after LFS cache cleanup:"
+          df -hT "$GITHUB_WORKSPACE" /
 
       - name: Install GitHub CLI
         shell: bash
@@ -162,61 +168,39 @@ jobs:
           set -euo pipefail
           sudo apt-get install -y --no-install-recommends gh
 
-      - name: Stage verified kernel artifact or build kernel from source
+      - name: Download and stage verified kernel artifact
         shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.KERNEL_REPO_TOKEN || github.token }}
         run: |
           set -euo pipefail
           cd "$GITHUB_WORKSPACE/android"
-          sudo apt-get install -y --no-install-recommends gh
-          kernel_dir="$GITHUB_WORKSPACE/android/kernel/motorola/msm8953"
           artifact_dir="$RUNNER_TEMP/deen-kernel-artifact"
-          have_artifact=false
-
-          # A token with Actions: read on the kernel repository can be supplied as
-          # the KERNEL_REPO_TOKEN secret. The built-in GITHUB_TOKEN is repo-scoped;
-          # if cross-repo artifact download is denied, compile the exact synced source.
-          if gh run download 40789837157 \
-              --repo isabe8499-oss/kernel_motorola_msm8953-22 \
-              --name deen-susfs23-12 \
-              --dir "$artifact_dir"; then
-            if [[ -s "$artifact_dir/out/arch/arm64/boot/Image.gz-dtb" ]] && \
-               [[ -s "$artifact_dir/out/.config" ]] && \
-               [[ -d "$artifact_dir/out/arch/arm64/boot/usr/include" ]]; then
-              rsync -a "$artifact_dir/out/" "$kernel_dir/out/"
-              have_artifact=true
-              echo "Using verified prebuilt kernel artifact."
-            else
-              echo "::warning::Kernel artifact downloaded, but expected image/config/headers were not all present; rebuilding kernel."
-            fi
-          else
-            echo "::warning::Could not download the cross-repository kernel artifact; rebuilding from the synchronized kernel source."
-          fi
-
-          if [[ "$have_artifact" != "true" ]]; then
-            cd "$kernel_dir"
-            ksu_sha="$(git ls-remote https://github.com/Baka-SU/BakaSU.git refs/heads/main | awk 'NR==1 {print $1}')"
-            [[ -n "$ksu_sha" ]] || { echo "::error::Could not resolve BakaSU main."; exit 1; }
-            export KSU_DIR="$RUNNER_TEMP/bakasu"
-            export TOOLCHAIN_DIR="$RUNNER_TEMP/clang"
-            export KSU_REF="$ksu_sha"
-            printf 'n\n' | ./build.sh deen -ksu -z
-            make -j"$(nproc --all)" O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 HOSTCFLAGS=-fcommon \
-              INSTALL_HDR_PATH="$PWD/out/arch/arm64/boot/usr" headers_install
-          fi
-
-          cd "$GITHUB_WORKSPACE/android"
-          bash device/motorola/deen/scripts/stage-kernel.sh kernel/motorola/msm8953
-
+          artifact_zip="$RUNNER_TEMP/deen-kernel-artifact.zip"
+          kernel_ref="3c61cdf1f2a670127f9253e35fddb6f481b55e1a"
+          mkdir -p "$artifact_dir"
+          # Fetch the already verified public Actions artifact without cloning
+          # the full 4.19 kernel repository or rebuilding it inside the ROM job.
+          curl --fail --location --retry 3 --retry-delay 2 \
+            "https://nightly.link/isabe8499-oss/kernel_motorola_msm8953-22/actions/artifacts/12861102885.zip" \
+            --output "$artifact_zip"
+          unzip -tq "$artifact_zip"
+          unzip -q "$artifact_zip" -d "$artifact_dir"
+          mkdir -p "$artifact_dir/include/linux" "$artifact_dir/fs/nomount"
+          raw_base="https://raw.githubusercontent.com/isabe8499-oss/kernel_motorola_msm8953-22/$kernel_ref"
+          curl --fail --location --retry 3 "$raw_base/include/linux/susfs.h" -o "$artifact_dir/include/linux/susfs.h"
+          curl --fail --location --retry 3 "$raw_base/fs/nomount/nomount.h" -o "$artifact_dir/fs/nomount/nomount.h"
+          expected_sha="d11a1238948ee840bbfb2e42a07bd3147c42346ea579131e413241f714b3179a"
+          actual_sha="$(sha256sum "$artifact_dir/out/arch/arm64/boot/Image.gz-dtb" | awk '{print $1}')"
+          [[ "$actual_sha" == "$expected_sha" ]] || { echo "::error::Kernel image SHA-256 mismatch: $actual_sha"; exit 1; }
+          bash device/motorola/deen/scripts/stage-kernel.sh "$artifact_dir"
+          rm -rf "$artifact_dir" "$artifact_zip"
+          echo "Kernel image and exported headers staged; artifact scratch data removed."
+          df -hT "$GITHUB_WORKSPACE" /
       - name: Build ROM
         shell: bash
         env:
           CLEAN_BUILD: ${{ inputs.clean_build || false }}
         run: |
-          # Android 12 / LineageOS 19.1 envsetup scripts intentionally inspect
-          # optional, unset shell variables. Bash nounset (-u) aborts at TOP or
-          # ZSH_VERSION before lunch can initialize the build environment.
+          # Avoid Bash nounset: the legacy Android 12 envsetup reads optional vars.
           set -eo pipefail
           cd "$GITHUB_WORKSPACE/android"
           if [[ "$CLEAN_BUILD" == "true" ]]; then
@@ -224,6 +208,18 @@ jobs:
           fi
           source build/envsetup.sh
           lunch lineage_deen-userdebug
+          # Parse/validate the product while Git metadata is intact.
+          m nothing
+          echo "Disk before reclaiming repository object cache:"
+          du -sh .repo .repo/project-objects .repo/projects 2>/dev/null || true
+          df -hT "$GITHUB_WORKSPACE" /
+          avail_kib="$(df --output=avail "$GITHUB_WORKSPACE" | awk 'NR==2 {print $1}')"
+          if (( avail_kib < 26214400 )); then
+            echo "::warning::Less than 25 GiB free after lunch. Keep checked-out source files and project refs, but discard the shared Git object cache to make room for build intermediates."
+            rm -rf .repo/project-objects .repo/subproject-objects .repo/modules
+          fi
+          echo "Disk before compiling ROM:"
+          df -hT "$GITHUB_WORKSPACE" /
           mka bacon -j"$ANDROID_JOBS"
 
       - name: Verify ROM ZIP exists and calculate SHA-256
