@@ -10,6 +10,8 @@ on:
       - 'AndroidProducts.mk'
       - 'device.mk'
       - 'lineage_deen.mk'
+      - 'system.prop'
+      - 'KERNEL_ROM_INTEGRATION.md'
       - 'lineage.dependencies'
       - 'extract-files.sh'
       - 'setup-makefiles.sh'
