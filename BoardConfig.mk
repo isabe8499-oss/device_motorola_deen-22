@@ -147,6 +147,10 @@ BOARD_MKBOOTIMG_ARGS += --header_version $(BOARD_BOOT_HEADER_VERSION)
 TARGET_NO_KERNEL_OVERRIDE := true
 TARGET_KERNEL_SOURCE := $(KERNEL_PATH)/kernel-headers
 
+# Use the separately built and verified Deen kernel in the boot image.
+LOCAL_KERNEL := $(KERNEL_PATH)/Image.gz-dtb
+PRODUCT_COPY_FILES += $(LOCAL_KERNEL):kernel
+
 # Lights
 TARGET_PROVIDES_LIBLIGHT := true
 
