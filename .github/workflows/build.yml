@@ -150,6 +150,11 @@ jobs:
           set -euo pipefail
           cd "$GITHUB_WORKSPACE/android"
           repo sync -c --force-sync --no-clone-bundle --no-tags -j2
+          # repo leaves synchronized projects detached at pinned commits; the
+          # device build helper checks named branch labels, so create local labels
+          # at the exact commits fetched by repo sync.
+          git -C device/motorola/deen switch -C lineage-19.1
+          git -C kernel/motorola/msm8953 switch -C bakasu-susfs23-deen
 
       - name: Install GitHub CLI
         shell: bash
