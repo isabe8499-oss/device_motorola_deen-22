@@ -46,15 +46,15 @@ jobs:
       - name: Maximize available build disk space
         uses: easimon/maximize-build-space@v10
         with:
-          root-reserve-mb: 1024
-          temp-reserve-mb: 512
-          swap-size-mb: 8192
+          root-reserve-mb: 512
+          temp-reserve-mb: 128
+          swap-size-mb: 1024
           remove-dotnet: "true"
-          remove-android: "false"
+          remove-android: "true"
           remove-haskell: "true"
           remove-codeql: "true"
           remove-docker-images: "true"
-          overprovision-lvm: "false"
+          overprovision-lvm: "true"
 
       - name: Inspect runner resources and require usable disk
         shell: bash
@@ -68,8 +68,8 @@ jobs:
           echo "Workspace free space: ${avail_gib} GiB"
           # A best-effort shared runner can vary; require 50 GiB to proceed with a shallow sync.
           # A successful full ROM build still generally needs substantially more storage.
-          if (( avail_kib < 52428800 )); then
-            echo "::error::Only ${avail_gib} GiB free after cleanup; refusing to sync a large Android tree. Use a larger/self-hosted runner with 200+ GiB free."
+          if (( avail_kib < 73400320 )); then
+            echo "::error::Only ${avail_gib} GiB free after cleanup; refusing to sync a large Android tree. Use a larger/self-hosted runner if this floor cannot be met."
             exit 1
           fi
 
