@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       clean_build:
-        description: "Run a clean build (slower; disables reuse of previous ccache)"
+        description: "Remove previous build output before compiling"
         required: false
         type: boolean
         default: false
@@ -31,8 +31,7 @@ concurrency:
 jobs:
   build:
     name: Compile LineageOS 19.1 (deen)
-    # Larger hosted runners can be selected by repository variable DEEN_RUNNER_LABELS.
-    # Default hosted runners may still lack enough physical disk / runtime for a full ROM.
+    # Optional repository variable DEEN_RUNNER_LABELS may be a JSON string/array of runner labels.
     runs-on: ${{ vars.DEEN_RUNNER_LABELS != '' && fromJSON(vars.DEEN_RUNNER_LABELS) || 'ubuntu-22.04' }}
     timeout-minutes: 350
     env:
@@ -43,12 +42,12 @@ jobs:
       ANDROID_JOBS: "2"
 
     steps:
-      # Must run before checkout because this action mounts/rebuilds the workspace volume.
+      # Must precede checkout: this action remounts the workspace volume.
       - name: Maximize available build disk space
         uses: easimon/maximize-build-space@v10
         with:
-          root-reserve-mb: 2048
-          temp-reserve-mb: 1024
+          root-reserve-mb: 1024
+          temp-reserve-mb: 512
           swap-size-mb: 12288
           remove-dotnet: "true"
           remove-android: "false"
@@ -57,24 +56,20 @@ jobs:
           remove-docker-images: "true"
           overprovision-lvm: "false"
 
-      - name: Inspect runner resources
+      - name: Inspect runner resources and require usable disk
         shell: bash
         run: |
           set -euo pipefail
-          echo "=== Disks ==="
           df -hT
-          echo "=== Memory ==="
           free -h
-          echo "=== CPUs ==="
           nproc
-          echo "=== Workspace ==="
-          df -h "$GITHUB_WORKSPACE"
           avail_kib="$(df -Pk --output=avail "$GITHUB_WORKSPACE" | awk 'NR==2 {print $1}')"
-          echo "Workspace available: $((avail_kib / 1024 / 1024)) GiB"
-          # Avoid spending the whole run downloading a manifest that cannot be built.
-          # 120 GiB is a floor, not a guarantee; 200+ GiB is preferred for full Android builds.
-          if (( avail_kib < 125829120 )); then
-            echo "::error::Only $((avail_kib / 1024 / 1024)) GiB free. The runner has less than the 120 GiB emergency floor for this ROM build. Use a self-hosted or larger runner with 200+ GiB free."
+          avail_gib=$((avail_kib / 1024 / 1024))
+          echo "Workspace free space: ${avail_gib} GiB"
+          # A best-effort shared runner can vary; require 50 GiB to proceed with a shallow sync.
+          # A successful full ROM build still generally needs substantially more storage.
+          if (( avail_kib < 52428800 )); then
+            echo "::error::Only ${avail_gib} GiB free after cleanup; refusing to sync a large Android tree. Use a larger/self-hosted runner with 200+ GiB free."
             exit 1
           fi
 
@@ -89,7 +84,12 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends             bc bison build-essential ccache curl flex g++-multilib gcc-multilib             git git-lfs gnupg gperf imagemagick lib32readline-dev lib32z1-dev             libelf-dev liblz4-tool libncurses-dev libsdl1.2-dev libssl-dev             libxml2 libxml2-utils lzop pngcrush rsync schedtool squashfs-tools             unzip xsltproc zip zlib1g-dev python3 python-is-python3
+          sudo apt-get install -y --no-install-recommends \
+            bc bison build-essential ccache curl flex g++-multilib gcc-multilib \
+            git git-lfs gnupg gperf imagemagick lib32readline-dev lib32z1-dev \
+            libelf-dev liblz4-tool libncurses-dev libssl-dev libxml2 libxml2-utils \
+            lzop pngcrush rsync schedtool squashfs-tools unzip xsltproc zip \
+            zlib1g-dev python3 python-is-python3
           git lfs install
 
       - name: Install repo tool
@@ -120,13 +120,14 @@ jobs:
           ccache --set-config=compression=true
           ccache --show-config
 
-      - name: Initialize LineageOS source (shallow manifest)
+      - name: Initialize LineageOS source using shallow sync
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p "$GITHUB_WORKSPACE/android"
           cd "$GITHUB_WORKSPACE/android"
-          repo init -u https://github.com/LineageOS/android.git             -b lineage-19.1 --depth=1 --git-lfs
+          repo init -u https://github.com/LineageOS/android.git \
+            -b lineage-19.1 --depth=1 --git-lfs
           mkdir -p .repo/local_manifests
           cat > .repo/local_manifests/deen.xml <<'XML'
           <?xml version="1.0" encoding="UTF-8"?>
@@ -148,8 +149,13 @@ jobs:
         run: |
           set -euo pipefail
           cd "$GITHUB_WORKSPACE/android"
-          # Keep CPU and memory pressure conservative on small shared runners.
           repo sync -c --force-sync --no-clone-bundle --no-tags -j2
+
+      - name: Install GitHub CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get install -y --no-install-recommends gh
 
       - name: Stage verified kernel artifact
         shell: bash
@@ -158,8 +164,10 @@ jobs:
         run: |
           set -euo pipefail
           cd "$GITHUB_WORKSPACE/android"
-          sudo apt-get install -y --no-install-recommends gh
-          gh run download 40789837157             --repo isabe8499-oss/kernel_motorola_msm8953-22             --name deen-susfs23-12             --dir "$RUNNER_TEMP/deen-kernel-artifact"
+          gh run download 40789837157 \
+            --repo isabe8499-oss/kernel_motorola_msm8953-22 \
+            --name deen-susfs23-12 \
+            --dir "$RUNNER_TEMP/deen-kernel-artifact"
           test -s "$RUNNER_TEMP/deen-kernel-artifact/out/arch/arm64/boot/Image.gz-dtb"
           test -s "$RUNNER_TEMP/deen-kernel-artifact/out/.config"
           test -d "$RUNNER_TEMP/deen-kernel-artifact/out/arch/arm64/boot/usr/include"
@@ -169,7 +177,7 @@ jobs:
       - name: Build ROM
         shell: bash
         env:
-          CLEAN_BUILD: ${{ inputs.clean_build }}
+          CLEAN_BUILD: ${{ inputs.clean_build || false }}
         run: |
           set -euo pipefail
           cd "$GITHUB_WORKSPACE/android"
@@ -178,17 +186,15 @@ jobs:
           fi
           source build/envsetup.sh
           lunch lineage_deen-userdebug
-          # Keep jobs low on shared runners; increase only on a runner with known RAM.
           mka bacon -j"$ANDROID_JOBS"
 
-      - name: Verify ROM ZIP exists
-        id: rom
+      - name: Verify ROM ZIP exists and calculate SHA-256
         shell: bash
         run: |
           set -euo pipefail
           out="$GITHUB_WORKSPACE/android/out/target/product/deen"
           shopt -s nullglob
-          zips=("$out"/*lineage*.zip "$out"/*deeen*.zip "$out"/*deen*.zip)
+          zips=("$out"/*lineage*.zip "$out"/*deen*.zip)
           if (( ${#zips[@]} == 0 )); then
             echo "::error::No ROM ZIP found under $out"
             find "$out" -maxdepth 1 -type f -printf '%f %s bytes\n' || true
@@ -196,11 +202,10 @@ jobs:
           fi
           mkdir -p "$GITHUB_WORKSPACE/rom-artifacts"
           for zip in "${zips[@]}"; do
-            [[ -s "$zip" ]] || continue
-            cp -v "$zip" "$GITHUB_WORKSPACE/rom-artifacts/"
+            [[ -s "$zip" ]] && cp -v "$zip" "$GITHUB_WORKSPACE/rom-artifacts/"
           done
+          test -n "$(find "$GITHUB_WORKSPACE/rom-artifacts" -maxdepth 1 -type f -name '*.zip' -print -quit)"
           (cd "$GITHUB_WORKSPACE/rom-artifacts" && sha256sum *.zip | tee SHA256SUMS.txt)
-          test -n "$(find "$GITHUB_WORKSPACE/rom-artifacts" -maxdepth 1 -name '*.zip' -type f -print -quit)"
 
       - name: Save ccache
         if: always()
