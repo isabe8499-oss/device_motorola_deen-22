@@ -4,5 +4,10 @@
     "target_path": "vendor/motorola/deen",
     "branch": "lineage-19.1",
     "remote": "github-user"
+  },
+  {
+    "repository": "isabe8499-oss/kernel_motorola_msm8953-22",
+    "target_path": "kernel/motorola/msm8953",
+    "branch": "bakasu-susfs23-deen"
   }
 ]
