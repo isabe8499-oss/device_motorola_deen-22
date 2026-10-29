@@ -214,7 +214,10 @@ jobs:
         env:
           CLEAN_BUILD: ${{ inputs.clean_build || false }}
         run: |
-          set -euo pipefail
+          # Android 12 / LineageOS 19.1 envsetup scripts intentionally inspect
+          # optional, unset shell variables. Bash nounset (-u) aborts at TOP or
+          # ZSH_VERSION before lunch can initialize the build environment.
+          set -eo pipefail
           cd "$GITHUB_WORKSPACE/android"
           if [[ "$CLEAN_BUILD" == "true" ]]; then
             rm -rf out
