@@ -183,7 +183,7 @@ jobs:
           # permissions allow it, so use the public artifact mirror with the
           # stable artifact ID from the kernel build run.
           artifact_zip="$RUNNER_TEMP/deen-kernel-artifact.zip"
-          artifact_url="https://nightly.link/isabe8499-oss/kernel_motorola_msm8953-22/actions/artifacts/12861102885.zip"
+          artifact_url="https://nightly.link/isabe8499-oss/kernel_motorola_msm8953-22/workflows/deen-kernel-build.yml/bakasu-susfs23-deen/deen-susfs23.zip"
           curl --fail --location --retry 3 --retry-delay 2 "$artifact_url" --output "$artifact_zip"
           unzip -tq "$artifact_zip"
           unzip -q "$artifact_zip" -d "$artifact_dir"
