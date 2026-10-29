@@ -177,25 +177,24 @@ jobs:
           artifact_zip="$RUNNER_TEMP/deen-kernel-artifact.zip"
           kernel_ref="1f71757e3deb804698c5c827c54a0a46b603f24c"
           mkdir -p "$artifact_dir"
-          # Fetch the already verified public Actions artifact without cloning
-          # the full 4.19 kernel repository or rebuilding it inside the ROM job.
-          curl --fail --location --retry 3 --retry-delay 2 \
-            "https://nightly.link/isabe8499-oss/kernel_motorola_msm8953-22/actions/artifacts/12874572755.zip" \
-            --output "$artifact_zip"
-          unzip -tq "$artifact_zip"
-          unzip -q "$artifact_zip" -d "$artifact_dir"
-          mkdir -p "$artifact_dir/include/linux" "$artifact_dir/fs/nomount"
-          # Both integration headers are included in the successful kernel
-          # build artifact; don't fetch generated/patch-integrated headers from
-          # raw source URLs (SUSFS header is not tracked in the source tree).
+          # Download the latest successful build by workflow filename and branch;
+          # avoid a hard-coded nightly.link artifact ID that becomes stale.
+          gh run download \
+            --repo isabe8499-oss/kernel_motorola_msm8953-22 \
+            --branch bakasu-susfs23-deen \
+            --name deen-susfs23 \
+            --dir "$artifact_dir"
+          test -s "$artifact_dir/out/arch/arm64/boot/Image.gz-dtb"
+          test -s "$artifact_dir/out/.config"
+          test -d "$artifact_dir/out/arch/arm64/boot/usr/include"
           test -s "$artifact_dir/include/linux/susfs.h"
           test -s "$artifact_dir/fs/nomount/nomount.h"
           expected_sha="1ded9b9066d5d6709de25dbf9faa0cbf319ed14a1e4312c642205735788e3d32"
           actual_sha="$(sha256sum "$artifact_dir/out/arch/arm64/boot/Image.gz-dtb" | awk '{print $1}')"
           [[ "$actual_sha" == "$expected_sha" ]] || { echo "::error::Kernel image SHA-256 mismatch: $actual_sha"; exit 1; }
           bash device/motorola/deen/scripts/stage-kernel.sh "$artifact_dir"
-          rm -rf "$artifact_dir" "$artifact_zip"
-          echo "Kernel image and exported headers staged; artifact scratch data removed."
+          rm -rf "$artifact_dir"
+          echo "Kernel image and exported headers staged."
           df -hT "$GITHUB_WORKSPACE" /
       - name: Build ROM
         shell: bash
