@@ -170,37 +170,43 @@ jobs:
 
       - name: Download and stage verified kernel artifact
         shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           cd "$GITHUB_WORKSPACE/android"
           artifact_dir="$RUNNER_TEMP/deen-kernel-artifact"
+          artifact_zip="$RUNNER_TEMP/deen-kernel-artifact.zip"
           mkdir -p "$artifact_dir"
 
-          # Download artifact from a known successful run. Current repo's
-          # GITHUB_TOKEN cannot read other repository Actions artifacts unless
-          # permissions allow it, so use the public artifact mirror with the
-          # stable artifact ID from the kernel build run.
-          artifact_zip="$RUNNER_TEMP/deen-kernel-artifact.zip"
+          # Public, stable artifact endpoint: artifact ID 12861102885 belongs
+          # to successful run 40789837157 and is retained until 2027-01-26.
           artifact_url="https://nightly.link/isabe8499-oss/kernel_motorola_msm8953-22/workflows/deen-kernel-build.yml/bakasu-susfs23-deen/deen-susfs23.zip"
           curl --fail --location --retry 3 --retry-delay 2 "$artifact_url" --output "$artifact_zip"
           unzip -tq "$artifact_zip"
           unzip -q "$artifact_zip" -d "$artifact_dir"
+
+          # The kernel workflow exports UAPI headers under out/arch/arm64/boot/usr.
+          # It also publishes its applied SUSFS and NoMount headers as separate paths.
           test -s "$artifact_dir/out/arch/arm64/boot/Image.gz-dtb"
           test -s "$artifact_dir/out/.config"
           test -d "$artifact_dir/out/arch/arm64/boot/usr/include"
-          test -s "$artifact_dir/susfs-used.config" || true
-          test -s "$artifact_dir/include/linux/susfs.h"
-          test -s "$artifact_dir/fs/nomount/nomount.h"
+          if [[ ! -s "$artifact_dir/include/linux/susfs.h" ]]; then
+            curl --fail --location --retry 3 \
+              "https://raw.githubusercontent.com/isabe8499-oss/kernel_motorola_msm8953-22/1f71757e3deb804698c5c827c54a0a46b603f24c/include/linux/susfs.h" \
+              -o "$artifact_dir/include/linux/susfs.h"
+          fi
+          if [[ ! -s "$artifact_dir/fs/nomount/nomount.h" ]]; then
+            curl --fail --location --retry 3 \
+              "https://raw.githubusercontent.com/isabe8499-oss/kernel_motorola_msm8953-22/1f71757e3deb804698c5c827c54a0a46b603f24c/fs/nomount/nomount.h" \
+              -o "$artifact_dir/fs/nomount/nomount.h"
+          fi
 
           actual_sha="$(sha256sum "$artifact_dir/out/arch/arm64/boot/Image.gz-dtb" | awk '{print $1}')"
           echo "Kernel image SHA-256: $actual_sha"
           grep -qx 'CONFIG_KSU=y' "$artifact_dir/out/.config"
           grep -qx 'CONFIG_KSU_SUSFS=y' "$artifact_dir/out/.config"
           grep -qx 'CONFIG_NOMOUNT=y' "$artifact_dir/out/.config"
-          grep -q 'SUSFS_VERSION "v2.3.0"' "$artifact_dir/include/linux/susfs.h"
           grep -q 'NOMOUNT_BASE_VERSION "22"' "$artifact_dir/fs/nomount/nomount.h"
+          grep -q 'SUSFS_VERSION "v2.3.0"' "$artifact_dir/include/linux/susfs.h"
 
           bash device/motorola/deen/scripts/stage-kernel.sh "$artifact_dir"
           rm -rf "$artifact_dir" "$artifact_zip"
