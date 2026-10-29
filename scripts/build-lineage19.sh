@@ -26,7 +26,7 @@ kernel_branch="$(git -C "${KERNEL_DIR}" branch --show-current)"
 kernel_version="$(make -s -C "${KERNEL_DIR}" kernelversion)"
 [[ "${kernel_version}" == "4.19.325" ]] || fail "Kernel source reports ${kernel_version}; expected 4.19.325."
 
-for option in CONFIG_KSU=y CONFIG_KSU_SUSFS=y CONFIG_KSU_SUSFS_OPEN_REDIRECT=y CONFIG_NOMOUNT=y; do
+for option in CONFIG_KSU=y CONFIG_KSU_SUSFS=y CONFIG_KSU_SUSFS_SUS_PATH=y CONFIG_KSU_SUSFS_SUS_MOUNT=y CONFIG_KSU_SUSFS_SUS_KSTAT=y CONFIG_KSU_SUSFS_SUS_MAP=y CONFIG_KSU_SUSFS_OPEN_REDIRECT=y CONFIG_KSU_SUSFS_ENABLE_LOG=y CONFIG_KSU_SUSFS_SPOOF_UNAME=y CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y CONFIG_NOMOUNT=y CONFIG_KEYS=y; do
     grep -qx "${option}" "${KERNEL_DIR}/out/.config" || fail "Kernel config missing ${option}; build the pinned kernel first."
 done
 
