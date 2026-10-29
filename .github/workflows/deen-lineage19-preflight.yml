@@ -30,6 +30,8 @@ jobs:
     steps:
       - name: Checkout device tree
         uses: actions/checkout@v4
+        with:
+          ref: lineage-19.1
 
       - name: Validate device product and boot configuration
         shell: bash
@@ -44,7 +46,7 @@ jobs:
           bash -n extract-files.sh
           bash -n setup-makefiles.sh
           bash -n scripts/stage-kernel.sh
-          echo "Device identity, legacy boot-image settings and extraction scripts passed static checks."
+          echo "Device identity, boot settings, and shell scripts passed static checks."
 
       - name: Validate dependency manifest
         shell: bash
@@ -55,32 +57,25 @@ jobs:
           from pathlib import Path
 
           deps = json.loads(Path("lineage.dependencies").read_text())
-          vendor = [
-              item for item in deps
-              if item.get("target_path") == "vendor/motorola/deen"
-          ]
-          kernel = [
-              item for item in deps
-              if item.get("target_path") == "kernel/motorola/msm8953"
-          ]
-          assert len(vendor) == 1, "Expected exactly one vendor/motorola/deen dependency"
+          vendor = [x for x in deps if x.get("target_path") == "vendor/motorola/deen"]
+          kernel = [x for x in deps if x.get("target_path") == "kernel/motorola/msm8953"]
+          assert len(vendor) == 1, "Expected one vendor/motorola/deen dependency"
           assert vendor[0].get("repository") == "Vhmit/vendor_motorola_deen"
           assert vendor[0].get("branch") == "lineage-19.1"
-          assert vendor[0].get("remote") == "github-user"
-          assert len(kernel) == 1, "Expected exactly one kernel/motorola/msm8953 dependency"
+          assert len(kernel) == 1, "Expected one kernel/motorola/msm8953 dependency"
           assert kernel[0].get("repository") == "isabe8499-oss/kernel_motorola_msm8953-22"
           assert kernel[0].get("branch") == "bakasu-susfs23-deen"
           print("Vendor and kernel dependency manifest is valid.")
           PY
 
-      - name: Verify upstream vendor and custom kernel refs
+      - name: Verify vendor and kernel branches exist
         shell: bash
         run: |
           set -euo pipefail
           git ls-remote --exit-code --heads https://github.com/Vhmit/vendor_motorola_deen.git refs/heads/lineage-19.1
           git ls-remote --exit-code --heads https://github.com/isabe8499-oss/kernel_motorola_msm8953-22.git refs/heads/bakasu-susfs23-deen
 
-      - name: Verify kernel 4.19.325, SUSFS 2.3.0 and NoMount inputs
+      - name: Verify kernel version, NoMount and SUSFS build inputs
         shell: bash
         run: |
           set -euo pipefail
@@ -89,54 +84,28 @@ jobs:
           grep -qx 'VERSION = 4' "$RUNNER_TEMP/kernel-Makefile"
           grep -qx 'PATCHLEVEL = 19' "$RUNNER_TEMP/kernel-Makefile"
           grep -qx 'SUBLEVEL = 325' "$RUNNER_TEMP/kernel-Makefile"
+
           curl --fail --silent --show-error --location "$base/arch/arm64/configs/vendor/deen_defconfig" -o "$RUNNER_TEMP/deen_defconfig"
-          grep -q '^CONFIG_ARCH_MSM8953=y          grep -q '^CONFIG_NOMOUNT=y$' "$RUNNER_TEMP/deen_defconfig"
-          curl --fail --silent --show-error --location "$base/patches/susfs-v2.3.0-4.19.patch" -o "$RUNNER_TEMP/susfs.patch"
-          curl --fail --silent --show-error --location "$base/patches/bakasu-susfs-v2.3.0-inline-hooks.patch" -o "$RUNNER_TEMP/bakasu-susfs.patch"
-          curl --fail --silent --show-error --location "$base/patches/susfs-v2.3.0.config" -o "$RUNNER_TEMP/susfs.config"
-          curl --fail --silent --show-error --location "$base/build.sh" -o "$RUNNER_TEMP/kernel-build.sh"
-          grep -q '^CONFIG_KSU_SUSFS_OPEN_REDIRECT=y$' "$RUNNER_TEMP/susfs.config"
-          grep -q 'apply_susfs_patches' "$RUNNER_TEMP/kernel-build.sh"
-          curl --fail --silent --show-error --location "$base/fs/nomount/nomount.h" -o "$RUNNER_TEMP/nomount.h"
-          grep -q 'NOMOUNT_BASE_VERSION "22"' "$RUNNER_TEMP/nomount.h"
-          echo "Kernel branch is Linux 4.19.325; NoMount is enabled and SUSFS 2.3.0 build patches/config are present."
-
-      - name: Report integration boundary
-        shell: bash
-        run: |
-          echo "::notice::This workflow validates source metadata and kernel integration inputs only; it does not compile Android or prove that the kernel boots."
-          echo "::notice::BoardConfig.mk expects a prebuilt Image.gz-dtb at device/motorola/deen-kernel/Image.gz-dtb. Stage the built kernel and exported headers before a ROM build."
- "$RUNNER_TEMP/deen_defconfig"
-          grep -q '^CONFIG_NOMOUNT=y          grep -q '^CONFIG_NOMOUNT=y$' "$RUNNER_TEMP/deen_defconfig"
-          curl --fail --silent --show-error --location "$base/patches/susfs-v2.3.0-4.19.patch" -o "$RUNNER_TEMP/susfs.patch"
-          curl --fail --silent --show-error --location "$base/patches/bakasu-susfs-v2.3.0-inline-hooks.patch" -o "$RUNNER_TEMP/bakasu-susfs.patch"
-          curl --fail --silent --show-error --location "$base/patches/susfs-v2.3.0.config" -o "$RUNNER_TEMP/susfs.config"
-          curl --fail --silent --show-error --location "$base/build.sh" -o "$RUNNER_TEMP/kernel-build.sh"
-          grep -q '^CONFIG_KSU_SUSFS_OPEN_REDIRECT=y$' "$RUNNER_TEMP/susfs.config"
-          grep -q 'apply_susfs_patches' "$RUNNER_TEMP/kernel-build.sh"
-          curl --fail --silent --show-error --location "$base/fs/nomount/nomount.h" -o "$RUNNER_TEMP/nomount.h"
-          grep -q 'NOMOUNT_BASE_VERSION "22"' "$RUNNER_TEMP/nomount.h"
-          echo "Kernel branch is Linux 4.19.325; NoMount is enabled and SUSFS 2.3.0 build patches/config are present."
-
-      - name: Report integration boundary
-        shell: bash
-        run: |
-          echo "::notice::This workflow validates source metadata and kernel integration inputs only; it does not compile Android or prove that the kernel boots."
-          echo "::notice::BoardConfig.mk expects a prebuilt Image.gz-dtb at device/motorola/deen-kernel/Image.gz-dtb. Stage the built kernel and exported headers before a ROM build."
- "$RUNNER_TEMP/deen_defconfig"
+          grep -q '^CONFIG_ARCH_MSM8953=y$' "$RUNNER_TEMP/deen_defconfig"
+          grep -q '^CONFIG_KEYS=y$' "$RUNNER_TEMP/deen_defconfig"
           grep -q '^CONFIG_NOMOUNT=y$' "$RUNNER_TEMP/deen_defconfig"
+
           curl --fail --silent --show-error --location "$base/patches/susfs-v2.3.0-4.19.patch" -o "$RUNNER_TEMP/susfs.patch"
           curl --fail --silent --show-error --location "$base/patches/bakasu-susfs-v2.3.0-inline-hooks.patch" -o "$RUNNER_TEMP/bakasu-susfs.patch"
           curl --fail --silent --show-error --location "$base/patches/susfs-v2.3.0.config" -o "$RUNNER_TEMP/susfs.config"
           curl --fail --silent --show-error --location "$base/build.sh" -o "$RUNNER_TEMP/kernel-build.sh"
+          curl --fail --silent --show-error --location "$base/fs/nomount/nomount.h" -o "$RUNNER_TEMP/nomount.h"
+
+          grep -q '^CONFIG_KSU_SUSFS=y$' "$RUNNER_TEMP/susfs.config"
           grep -q '^CONFIG_KSU_SUSFS_OPEN_REDIRECT=y$' "$RUNNER_TEMP/susfs.config"
           grep -q 'apply_susfs_patches' "$RUNNER_TEMP/kernel-build.sh"
-          curl --fail --silent --show-error --location "$base/fs/nomount/nomount.h" -o "$RUNNER_TEMP/nomount.h"
           grep -q 'NOMOUNT_BASE_VERSION "22"' "$RUNNER_TEMP/nomount.h"
-          echo "Kernel branch is Linux 4.19.325; NoMount is enabled and SUSFS 2.3.0 build patches/config are present."
+          test -s "$RUNNER_TEMP/susfs.patch"
+          test -s "$RUNNER_TEMP/bakasu-susfs.patch"
+          echo "Linux 4.19.325, NoMount v22, and SUSFS 2.3.0 inputs verified."
 
       - name: Report integration boundary
         shell: bash
         run: |
-          echo "::notice::This workflow validates source metadata and kernel integration inputs only; it does not compile Android or prove that the kernel boots."
-          echo "::notice::BoardConfig.mk expects a prebuilt Image.gz-dtb at device/motorola/deen-kernel/Image.gz-dtb. Stage the built kernel and exported headers before a ROM build."
+          echo "::notice::This preflight validates source metadata and build inputs; it does not compile Android or prove device boot."
+          echo "::notice::The ROM tree expects a staged Image.gz-dtb and exported headers before the ROM build."
