@@ -1,0 +1,229 @@
+name: Build LineageOS 19.1 for Motorola One Deen
+
+on:
+  workflow_dispatch:
+    inputs:
+      clean_build:
+        description: "Run a clean build (slower; disables reuse of previous ccache)"
+        required: false
+        type: boolean
+        default: false
+  push:
+    branches:
+      - lineage-19.1
+    paths:
+      - ".github/workflows/build.yml"
+      - "ROM_BUILD.md"
+      - "scripts/build-lineage19.sh"
+      - "scripts/stage-kernel.sh"
+      - "lineage_deen.mk"
+      - "BoardConfig.mk"
+      - "device.mk"
+      - "lineage.dependencies"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deen-lineage19-rom-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Compile LineageOS 19.1 (deen)
+    # Larger hosted runners can be selected by repository variable DEEN_RUNNER_LABELS.
+    # Default hosted runners may still lack enough physical disk / runtime for a full ROM.
+    runs-on: ${{ vars.DEEN_RUNNER_LABELS != '' && fromJSON(vars.DEEN_RUNNER_LABELS) || 'ubuntu-22.04' }}
+    timeout-minutes: 350
+    env:
+      USE_CCACHE: "1"
+      CCACHE_EXEC: ccache
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 20G
+      ANDROID_JOBS: "2"
+
+    steps:
+      # Must run before checkout because this action mounts/rebuilds the workspace volume.
+      - name: Maximize available build disk space
+        uses: easimon/maximize-build-space@v10
+        with:
+          root-reserve-mb: 2048
+          temp-reserve-mb: 1024
+          swap-size-mb: 12288
+          remove-dotnet: "true"
+          remove-android: "false"
+          remove-haskell: "true"
+          remove-codeql: "true"
+          remove-docker-images: "true"
+          overprovision-lvm: "false"
+
+      - name: Inspect runner resources
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "=== Disks ==="
+          df -hT
+          echo "=== Memory ==="
+          free -h
+          echo "=== CPUs ==="
+          nproc
+          echo "=== Workspace ==="
+          df -h "$GITHUB_WORKSPACE"
+          avail_kib="$(df -Pk --output=avail "$GITHUB_WORKSPACE" | awk 'NR==2 {print $1}')"
+          echo "Workspace available: $((avail_kib / 1024 / 1024)) GiB"
+          # Avoid spending the whole run downloading a manifest that cannot be built.
+          # 120 GiB is a floor, not a guarantee; 200+ GiB is preferred for full Android builds.
+          if (( avail_kib < 125829120 )); then
+            echo "::error::Only $((avail_kib / 1024 / 1024)) GiB free. The runner has less than the 120 GiB emergency floor for this ROM build. Use a self-hosted or larger runner with 200+ GiB free."
+            exit 1
+          fi
+
+      - name: Checkout device tree
+        uses: actions/checkout@v4
+        with:
+          ref: lineage-19.1
+          fetch-depth: 1
+
+      - name: Install host dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends             bc bison build-essential ccache curl flex g++-multilib gcc-multilib             git git-lfs gnupg gperf imagemagick lib32readline-dev lib32z1-dev             libelf-dev liblz4-tool libncurses-dev libsdl1.2-dev libssl-dev             libxml2 libxml2-utils lzop pngcrush rsync schedtool squashfs-tools             unzip xsltproc zip zlib1g-dev python3 python-is-python3
+          git lfs install
+
+      - name: Install repo tool
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/bin"
+          curl --fail --silent --show-error --location https://storage.googleapis.com/git-repo-downloads/repo -o "$HOME/bin/repo"
+          chmod a+x "$HOME/bin/repo"
+          echo "$HOME/bin" >> "$GITHUB_PATH"
+          "$HOME/bin/repo" version
+
+      - name: Restore ccache
+        uses: actions/cache/restore@v4
+        with:
+          path: .ccache
+          key: deen-lineage19-ccache-${{ runner.os }}-${{ github.ref_name }}-${{ github.sha }}
+          restore-keys: |
+            deen-lineage19-ccache-${{ runner.os }}-${{ github.ref_name }}-
+            deen-lineage19-ccache-${{ runner.os }}-
+
+      - name: Configure ccache
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$CCACHE_DIR"
+          ccache --set-config=max_size="$CCACHE_MAXSIZE"
+          ccache --set-config=compression=true
+          ccache --show-config
+
+      - name: Initialize LineageOS source (shallow manifest)
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$GITHUB_WORKSPACE/android"
+          cd "$GITHUB_WORKSPACE/android"
+          repo init -u https://github.com/LineageOS/android.git             -b lineage-19.1 --depth=1 --git-lfs
+          mkdir -p .repo/local_manifests
+          cat > .repo/local_manifests/deen.xml <<'XML'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <manifest>
+            <remote name="deen-github" fetch="https://github.com/" />
+            <project name="isabe8499-oss/device_motorola_deen-22" path="device/motorola/deen" remote="deen-github" revision="lineage-19.1" />
+            <project name="Vhmit/vendor_motorola_deen" path="vendor/motorola/deen" remote="deen-github" revision="lineage-19.1" />
+            <project name="isabe8499-oss/kernel_motorola_msm8953-22" path="kernel/motorola/msm8953" remote="deen-github" revision="bakasu-susfs23-deen" />
+          </manifest>
+          XML
+          python3 - <<'PY'
+          import xml.etree.ElementTree as ET
+          ET.parse(".repo/local_manifests/deen.xml")
+          print("Local manifest XML validated.")
+          PY
+
+      - name: Sync Android source
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE/android"
+          # Keep CPU and memory pressure conservative on small shared runners.
+          repo sync -c --force-sync --no-clone-bundle --no-tags -j2
+
+      - name: Stage verified kernel artifact
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE/android"
+          sudo apt-get install -y --no-install-recommends gh
+          gh run download 40789837157             --repo isabe8499-oss/kernel_motorola_msm8953-22             --name deen-susfs23-12             --dir "$RUNNER_TEMP/deen-kernel-artifact"
+          test -s "$RUNNER_TEMP/deen-kernel-artifact/out/arch/arm64/boot/Image.gz-dtb"
+          test -s "$RUNNER_TEMP/deen-kernel-artifact/out/.config"
+          test -d "$RUNNER_TEMP/deen-kernel-artifact/out/arch/arm64/boot/usr/include"
+          rsync -a "$RUNNER_TEMP/deen-kernel-artifact/out/" kernel/motorola/msm8953/out/
+          bash device/motorola/deen/scripts/stage-kernel.sh kernel/motorola/msm8953
+
+      - name: Build ROM
+        shell: bash
+        env:
+          CLEAN_BUILD: ${{ inputs.clean_build }}
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE/android"
+          if [[ "$CLEAN_BUILD" == "true" ]]; then
+            rm -rf out
+          fi
+          source build/envsetup.sh
+          lunch lineage_deen-userdebug
+          # Keep jobs low on shared runners; increase only on a runner with known RAM.
+          mka bacon -j"$ANDROID_JOBS"
+
+      - name: Verify ROM ZIP exists
+        id: rom
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$GITHUB_WORKSPACE/android/out/target/product/deen"
+          shopt -s nullglob
+          zips=("$out"/*lineage*.zip "$out"/*deeen*.zip "$out"/*deen*.zip)
+          if (( ${#zips[@]} == 0 )); then
+            echo "::error::No ROM ZIP found under $out"
+            find "$out" -maxdepth 1 -type f -printf '%f %s bytes\n' || true
+            exit 1
+          fi
+          mkdir -p "$GITHUB_WORKSPACE/rom-artifacts"
+          for zip in "${zips[@]}"; do
+            [[ -s "$zip" ]] || continue
+            cp -v "$zip" "$GITHUB_WORKSPACE/rom-artifacts/"
+          done
+          (cd "$GITHUB_WORKSPACE/rom-artifacts" && sha256sum *.zip | tee SHA256SUMS.txt)
+          test -n "$(find "$GITHUB_WORKSPACE/rom-artifacts" -maxdepth 1 -name '*.zip' -type f -print -quit)"
+
+      - name: Save ccache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: .ccache
+          key: deen-lineage19-ccache-${{ runner.os }}-${{ github.ref_name }}-${{ github.sha }}
+
+      - name: Upload ROM ZIP
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lineage-deen-19.1-${{ github.sha }}
+          path: |
+            rom-artifacts/*.zip
+            rom-artifacts/SHA256SUMS.txt
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+
+      - name: Report disk and ccache status
+        if: always()
+        shell: bash
+        run: |
+          ccache -s || true
+          df -hT || true
