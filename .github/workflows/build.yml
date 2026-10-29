@@ -185,14 +185,11 @@ jobs:
           unzip -tq "$artifact_zip"
           unzip -q "$artifact_zip" -d "$artifact_dir"
           mkdir -p "$artifact_dir/include/linux" "$artifact_dir/fs/nomount"
-          # SUSFS header is carried by the kernel build artifact; this source
-          # tree uses a generated/patch-integrated SUSFS implementation and
-          # does not expose include/linux/susfs.h at the current commit.
-          # Validate the artifact before staging and only fetch NoMount's header
-          # from the pinned source commit where that file exists.
+          # Both integration headers are included in the successful kernel
+          # build artifact; don't fetch generated/patch-integrated headers from
+          # raw source URLs (SUSFS header is not tracked in the source tree).
           test -s "$artifact_dir/include/linux/susfs.h"
-          raw_base="https://raw.githubusercontent.com/isabe8499-oss/kernel_motorola_msm8953-22/$kernel_ref"
-          curl --fail --location --retry 3 "$raw_base/fs/nomount/nomount.h" -o "$artifact_dir/fs/nomount/nomount.h"
+          test -s "$artifact_dir/fs/nomount/nomount.h"
           expected_sha="1ded9b9066d5d6709de25dbf9faa0cbf319ed14a1e4312c642205735788e3d32"
           actual_sha="$(sha256sum "$artifact_dir/out/arch/arm64/boot/Image.gz-dtb" | awk '{print $1}')"
           [[ "$actual_sha" == "$expected_sha" ]] || { echo "::error::Kernel image SHA-256 mismatch: $actual_sha"; exit 1; }
