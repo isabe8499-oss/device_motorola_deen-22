@@ -25,15 +25,16 @@ mkdir -p .repo/local_manifests
 cat > .repo/local_manifests/deen.xml <<'XML'
 <?xml version="1.0" encoding="UTF-8"?>
 <manifest>
-  <project name="isabe8499-oss/device_motorola_deen-22" path="device/motorola/deen" remote="github" revision="lineage-19.1" />
-  <project name="Vhmit/vendor_motorola_deen" path="vendor/motorola/deen" remote="github" revision="lineage-19.1" />
-  <project name="isabe8499-oss/kernel_motorola_msm8953-22" path="kernel/motorola/msm8953" remote="github" revision="bakasu-susfs23-deen" />
+  <remote name="deen-github" fetch="https://github.com/" />
+  <project name="isabe8499-oss/device_motorola_deen-22" path="device/motorola/deen" remote="deen-github" revision="lineage-19.1" />
+  <project name="Vhmit/vendor_motorola_deen" path="vendor/motorola/deen" remote="deen-github" revision="lineage-19.1" />
+  <project name="isabe8499-oss/kernel_motorola_msm8953-22" path="kernel/motorola/msm8953" remote="deen-github" revision="bakasu-susfs23-deen" />
 </manifest>
 XML
 repo sync -c --force-sync --no-clone-bundle --no-tags -j"$(nproc --all)"
 ```
 
-The manifest's `github` remote is defined by the LineageOS default manifest. Verify that these three project paths and revisions match the pins above before building.
+The local manifest defines a separate `deen-github` remote so the owner/repository names resolve to the intended GitHub forks rather than being interpreted relative to LineageOS's default remote. Verify that these three project paths and revisions match the pins above before building.
 
 ## Build and stage the kernel
 
