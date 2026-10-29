@@ -16,6 +16,8 @@ on:
       - 'extract-files.sh'
       - 'setup-makefiles.sh'
       - 'scripts/stage-kernel.sh'
+      - 'scripts/build-lineage19.sh'
+      - 'ROM_BUILD.md'
       - '.github/workflows/deen-lineage19-preflight.yml'
   pull_request:
     branches:
@@ -50,6 +52,7 @@ jobs:
           bash -n extract-files.sh
           bash -n setup-makefiles.sh
           bash -n scripts/stage-kernel.sh
+          bash -n scripts/build-lineage19.sh
           echo "Device identity, Android 12 fingerprint policy, boot settings, and shell scripts passed static checks."
 
       - name: Validate dependency manifest
