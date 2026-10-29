@@ -170,22 +170,30 @@ jobs:
 
       - name: Download and stage verified kernel artifact
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           cd "$GITHUB_WORKSPACE/android"
           artifact_dir="$RUNNER_TEMP/deen-kernel-artifact"
           mkdir -p "$artifact_dir"
-          # Download the artifact from the exact successful kernel workflow run.
-          # This uses only the public artifact id and does not clone the kernel tree.
-          gh run download 40820488471 \
-            --repo isabe8499-oss/kernel_motorola_msm8953-22 \
-            --name deen-susfs23 \
-            --dir "$artifact_dir"
+
+          # Download artifact from a known successful run. Current repo's
+          # GITHUB_TOKEN cannot read other repository Actions artifacts unless
+          # permissions allow it, so use the public artifact mirror with the
+          # stable artifact ID from the kernel build run.
+          artifact_zip="$RUNNER_TEMP/deen-kernel-artifact.zip"
+          artifact_url="https://nightly.link/isabe8499-oss/kernel_motorola_msm8953-22/actions/artifacts/12861102885.zip"
+          curl --fail --location --retry 3 --retry-delay 2 "$artifact_url" --output "$artifact_zip"
+          unzip -tq "$artifact_zip"
+          unzip -q "$artifact_zip" -d "$artifact_dir"
           test -s "$artifact_dir/out/arch/arm64/boot/Image.gz-dtb"
           test -s "$artifact_dir/out/.config"
           test -d "$artifact_dir/out/arch/arm64/boot/usr/include"
+          test -s "$artifact_dir/susfs-used.config" || true
           test -s "$artifact_dir/include/linux/susfs.h"
           test -s "$artifact_dir/fs/nomount/nomount.h"
+
           actual_sha="$(sha256sum "$artifact_dir/out/arch/arm64/boot/Image.gz-dtb" | awk '{print $1}')"
           echo "Kernel image SHA-256: $actual_sha"
           grep -qx 'CONFIG_KSU=y' "$artifact_dir/out/.config"
@@ -193,8 +201,9 @@ jobs:
           grep -qx 'CONFIG_NOMOUNT=y' "$artifact_dir/out/.config"
           grep -q 'SUSFS_VERSION "v2.3.0"' "$artifact_dir/include/linux/susfs.h"
           grep -q 'NOMOUNT_BASE_VERSION "22"' "$artifact_dir/fs/nomount/nomount.h"
+
           bash device/motorola/deen/scripts/stage-kernel.sh "$artifact_dir"
-          rm -rf "$artifact_dir"
+          rm -rf "$artifact_dir" "$artifact_zip"
           echo "Kernel image and exported headers staged."
           df -hT "$GITHUB_WORKSPACE" /
       - name: Build ROM
