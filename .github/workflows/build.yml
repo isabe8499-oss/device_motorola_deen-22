@@ -222,11 +222,21 @@ jobs:
           find "$artifact_dir" -maxdepth 5 -type f | sort | head -200
           image="$(find "$artifact_dir" -type f -path '*/out/arch/arm64/boot/Image.gz-dtb' -print -quit)"
           config="$(find "$artifact_dir" -type f -path '*/out/.config' -print -quit)"
+          # The kernel workflow exports a verified copy at artifact root too.
+          # Some artifact mirrors flatten or omit the hidden build output path.
+          if [[ -z "$config" ]]; then
+            config="$(find "$artifact_dir" -type f -name 'susfs-used.config' -print -quit)"
+          fi
           headers="$(find "$artifact_dir" -type d -path '*/out/arch/arm64/boot/usr/include' -print -quit)"
           susfs_header="$(find "$artifact_dir" -type f -path '*/include/linux/susfs.h' -print -quit)"
           nomount_header="$(find "$artifact_dir" -type f -path '*/fs/nomount/nomount.h' -print -quit)"
           test -n "$image" && test -s "$image"
-          test -n "$config" && test -s "$config"
+          if [[ -z "$config" || ! -s "$config" ]]; then
+            echo "::error::Kernel artifact is missing both out/.config and susfs-used.config"
+            find "$artifact_dir" -maxdepth 8 -type f -print | sort
+            exit 1
+          fi
+          echo "Using kernel config: $config"
           test -n "$headers" && test -d "$headers"
           test -n "$susfs_header" && test -s "$susfs_header"
           test -n "$nomount_header" && test -s "$nomount_header"
