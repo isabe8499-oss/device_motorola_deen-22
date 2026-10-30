@@ -146,21 +146,54 @@ jobs:
       - name: Sync Android source
         shell: bash
         run: |
-          set -euo pipefail
+          set -Eeuo pipefail
           cd "$GITHUB_WORKSPACE/android"
-          repo sync -c --force-sync --no-clone-bundle --no-tags -j2
-          # repo leaves synchronized projects detached at pinned commits; the
-          # device build helper checks named branch labels, so create local labels
-          # at the exact commits fetched by repo sync.
+          sync_log="$RUNNER_TEMP/repo-sync.log"
+          echo "Repo version:"
+          repo version
+          echo "Projects declared by the resolved manifest: $(repo list | wc -l)"
+          echo "Disk before source sync:"
+          df -hT "$GITHUB_WORKSPACE" /
+          # Four workers match the runner's usual vCPU count and the manifest's
+          # sync-j setting. Retry transient network fetch failures and stop at
+          # the first persistent project failure so the log identifies it.
+          if repo sync -c --force-sync --no-clone-bundle --no-tags \
+              --jobs=4 --retry-fetches=3 --fail-fast --verbose 2>&1 | tee "$sync_log"; then
+            sync_status=0
+          else
+            sync_status=${PIPESTATUS[0]}
+          fi
+          if (( sync_status != 0 )); then
+            echo "::error::repo sync failed with exit code ${sync_status}"
+            echo "Relevant sync errors:"
+            grep -Ei 'error:|fatal:|failed to|not found|no space left|RPC failed|timed out|could not resolve|connection reset|authentication failed' "$sync_log" | tail -100 || true
+            echo "Disk after failed source sync:"
+            df -hT "$GITHUB_WORKSPACE" /
+            echo "Size of repo metadata:"
+            du -sh .repo .repo/project-objects .repo/projects 2>/dev/null || true
+            exit "$sync_status"
+          fi
+          # repo leaves synchronized projects detached at pinned commits; create
+          # a local branch label for the device tree without changing its commit.
           git -C device/motorola/deen switch -C lineage-19.1
-          # Clear Git LFS download cache only after repo has materialized its files
-          # in the checked-out source tree; this removes duplicate LFS payloads.
+          test -s device/motorola/deen/lineage_deen.mk
+          test -s vendor/motorola/deen/deen-vendor.mk
+          # The LFS cache duplicates payloads already materialized in the tree.
           echo "Disk before LFS cache cleanup:"
           df -hT "$GITHUB_WORKSPACE" /
           find .repo -type d -path '*/lfs/objects' -prune -exec du -sh {} + 2>/dev/null || true
           find .repo -type d -path '*/lfs/objects' -prune -exec rm -rf {} +
           echo "Disk after LFS cache cleanup:"
           df -hT "$GITHUB_WORKSPACE" /
+
+      - name: Upload source-sync diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: deen-lineage19-sync-diagnostics-${{ github.run_id }}
+          path: ${{ runner.temp }}/repo-sync.log
+          if-no-files-found: warn
+          retention-days: 7
 
       - name: Install GitHub CLI
         shell: bash
@@ -232,13 +265,19 @@ jobs:
           lunch lineage_deen-userdebug
           # Parse/validate the product while Git metadata is intact.
           m nothing
-          echo "Disk before reclaiming repository object cache:"
-          du -sh .repo .repo/project-objects .repo/projects 2>/dev/null || true
+          echo "Disk before build-space check:"
+          du -sh .repo .repo/project-objects .repo/projects .ccache out 2>/dev/null || true
           df -hT "$GITHUB_WORKSPACE" /
           avail_kib="$(df --output=avail "$GITHUB_WORKSPACE" | awk 'NR==2 {print $1}')"
           if (( avail_kib < 26214400 )); then
-            echo "::warning::Less than 25 GiB free after lunch. Keep checked-out source files and project refs, but discard the shared Git object cache to make room for build intermediates."
-            rm -rf .repo/project-objects .repo/subproject-objects .repo/modules
+            echo "::warning::Less than 25 GiB free after lunch. Clear compiler cache first; do not delete .repo/project-objects because project Git checkouts can depend on those objects."
+            ccache -C || true
+            avail_kib="$(df --output=avail "$GITHUB_WORKSPACE" | awk 'NR==2 {print $1}')"
+            if (( avail_kib < 26214400 )); then
+              avail_gib=$((avail_kib / 1024 / 1024))
+              echo "::error::Only ${avail_gib} GiB remain. Aborting before compilation rather than corrupting Git metadata or exhausting the runner disk."
+              exit 1
+            fi
           fi
           echo "Disk before compiling ROM:"
           df -hT "$GITHUB_WORKSPACE" /
