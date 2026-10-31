@@ -183,7 +183,7 @@ jobs:
       - name: Sync Android source
         shell: bash
         run: |
-          set -Eeo pipefail
+          set -Eeuo pipefail
           cd "$ANDROID_TOP"
           sync_log="$RUNNER_TEMP/repo-sync.log"
           echo "Repo version:"
@@ -325,8 +325,8 @@ jobs:
         env:
           CLEAN_BUILD: ${{ inputs.clean_build || false }}
         run: |
-          # Avoid Bash nounset: the legacy Android 12 envsetup reads optional vars.
-          set -Eeuo pipefail
+          # Android 12 envsetup.sh is not compatible with nounset (-u).
+          set -Eeo pipefail
           cd "$ANDROID_TOP"
           build_log="$RUNNER_TEMP/lineage-build.log"
           resource_log="$RUNNER_TEMP/lineage-resource.log"
