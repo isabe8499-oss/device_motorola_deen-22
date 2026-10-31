@@ -183,7 +183,8 @@ jobs:
           data = json.load(open(sys.argv[1]))
           run_id, sha = sys.argv[2], sys.argv[3]
           artifacts = [a for a in data.get("artifacts", [])
-                       if a.get("name", "").startswith("deen-susfs23-")
+                       if (a.get("name") == "deen-susfs23"
+                           or a.get("name", "").startswith("deen-susfs23-"))
                        and not a.get("expired", True)
                        and a.get("size_in_bytes", 0) > 0]
           if not artifacts:
