@@ -183,7 +183,7 @@ jobs:
       - name: Sync Android source
         shell: bash
         run: |
-          set -Eeuo pipefail
+          set -Eeo pipefail
           cd "$ANDROID_TOP"
           sync_log="$RUNNER_TEMP/repo-sync.log"
           echo "Repo version:"
