@@ -56,20 +56,31 @@ jobs:
           remove-docker-images: "true"
           overprovision-lvm: "true"
 
-      - name: Inspect runner resources and require usable disk
+      - name: Inspect runner resources and require split-volume capacity
         shell: bash
         run: |
           set -euo pipefail
           df -hT
           free -h
           nproc
-          avail_kib="$(df --output=avail "$GITHUB_WORKSPACE" | awk 'NR==2 {print $1}')"
-          avail_gib=$((avail_kib / 1024 / 1024))
-          echo "Workspace free space: ${avail_gib} GiB"
-          # A best-effort shared runner can vary; require 50 GiB to proceed with a shallow sync.
-          # A successful full ROM build still generally needs substantially more storage.
-          if (( avail_kib < 73400320 )); then
-            echo "::error::Only ${avail_gib} GiB free after cleanup; refusing to sync a large Android tree. Use a larger/self-hosted runner if this floor cannot be met."
+          workspace_kib="$(df --output=avail "$GITHUB_WORKSPACE" | awk 'NR==2 {print $1}')"
+          temp_kib="$(df --output=avail "$RUNNER_TEMP" | awk 'NR==2 {print $1}')"
+          workspace_device="$(df --output=source "$GITHUB_WORKSPACE" | awk 'NR==2 {print $1}')"
+          temp_device="$(df --output=source "$RUNNER_TEMP" | awk 'NR==2 {print $1}')"
+          combined_kib=$((workspace_kib + temp_kib))
+          combined_gib=$((combined_kib / 1024 / 1024))
+          workspace_gib=$((workspace_kib / 1024 / 1024))
+          temp_gib=$((temp_kib / 1024 / 1024))
+          echo "Workspace free: ${workspace_gib} GiB on ${workspace_device}"
+          echo "Runner-temp free: ${temp_gib} GiB on ${temp_device}"
+          echo "Combined free storage: ${combined_gib} GiB"
+          if [[ "$workspace_device" == "$temp_device" ]]; then
+            echo "::error::GITHUB_WORKSPACE and RUNNER_TEMP are on the same filesystem; the split-volume Android layout cannot increase usable capacity."
+            exit 1
+          fi
+          # ROM_BUILD.md requires at least 200 GiB free for a complete source sync and build.
+          if (( workspace_kib < 70 * 1024 * 1024 || temp_kib < 70 * 1024 * 1024 || combined_kib < 200 * 1024 * 1024 )); then
+            echo "::error::Insufficient split-volume capacity. Need >=70 GiB on each filesystem and >=200 GiB combined before syncing LineageOS."
             exit 1
           fi
 
@@ -78,6 +89,31 @@ jobs:
         with:
           ref: lineage-19.1
           fetch-depth: 1
+
+      - name: Prepare split-volume Android source layout
+        shell: bash
+        run: |
+          set -euo pipefail
+          export ANDROID_TOP="$RUNNER_TEMP/android"
+          repo_metadata="$GITHUB_WORKSPACE/.repo"
+          mkdir -p "$ANDROID_TOP" "$repo_metadata" "$ANDROID_TOP/.repo"
+          if find "$repo_metadata" -mindepth 1 -maxdepth 1 -print -quit | grep -q .; then
+            echo "::error::Refusing to mount over a non-empty .repo metadata directory."
+            exit 1
+          fi
+          workspace_device="$(df --output=source "$GITHUB_WORKSPACE" | awk 'NR==2 {print $1}')"
+          android_device="$(df --output=source "$ANDROID_TOP" | awk 'NR==2 {print $1}')"
+          if [[ "$workspace_device" == "$android_device" ]]; then
+            echo "::error::Android worktree and .repo metadata must be on separate filesystems."
+            exit 1
+          fi
+          sudo mount --bind "$repo_metadata" "$ANDROID_TOP/.repo"
+          mountpoint -q "$ANDROID_TOP/.repo"
+          echo "ANDROID_TOP=$ANDROID_TOP" >> "$GITHUB_ENV"
+          echo "Android worktree volume:"
+          df -hT "$ANDROID_TOP"
+          echo "Repo metadata volume:"
+          df -hT "$ANDROID_TOP/.repo"
 
       - name: Install host dependencies
         shell: bash
@@ -124,8 +160,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p "$GITHUB_WORKSPACE/android"
-          cd "$GITHUB_WORKSPACE/android"
+          cd "$ANDROID_TOP"
           repo init -u https://github.com/LineageOS/android.git \
             -b lineage-19.1 --depth=1 --git-lfs
           mkdir -p .repo/local_manifests
@@ -147,28 +182,51 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          cd "$GITHUB_WORKSPACE/android"
+          cd "$ANDROID_TOP"
           sync_log="$RUNNER_TEMP/repo-sync.log"
           echo "Repo version:"
           repo version
           echo "Projects declared by the resolved manifest: $(repo list | wc -l)"
           echo "Disk before source sync:"
-          df -hT "$GITHUB_WORKSPACE" /
+          df -hT "$ANDROID_TOP" "$GITHUB_WORKSPACE" /
           # Four workers match the runner's usual vCPU count and the manifest's
           # sync-j setting. Retry transient network fetch failures and stop at
           # the first persistent project failure so the log identifies it.
-          if repo sync -c --force-sync --no-clone-bundle --no-tags \
-              --jobs=4 --retry-fetches=3 --fail-fast --verbose 2>&1 | tee "$sync_log"; then
-            sync_status=0
-          else
-            sync_status=${PIPESTATUS[0]}
-          fi
+          export GIT_TERMINAL_PROMPT=0
+          git config --global http.lowSpeedLimit 1000
+          git config --global http.lowSpeedTime 300
+          # Keep a visible heartbeat and disk/last-project diagnostics while a
+          # slow GitHub fetch is running. The grouped pipeline preserves repo's
+          # exit status via pipefail.
+          (
+            set -o pipefail
+            repo sync -c --force-sync --no-clone-bundle --no-tags \
+              --jobs=4 --retry-fetches=3 --fail-fast --verbose 2>&1 | tee "$sync_log"
+          ) &
+          sync_pid=$!
+          (
+            while kill -0 "$sync_pid" 2>/dev/null; do
+              sleep 60
+              if kill -0 "$sync_pid" 2>/dev/null; then
+                echo "::notice::repo sync heartbeat at $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+                df -hT "$ANDROID_TOP" "$GITHUB_WORKSPACE" / || true
+                tail -n 8 "$sync_log" || true
+              fi
+            done
+          ) &
+          heartbeat_pid=$!
+          set +e
+          wait "$sync_pid"
+          sync_status=$?
+          set -e
+          kill "$heartbeat_pid" 2>/dev/null || true
+          wait "$heartbeat_pid" 2>/dev/null || true
           if (( sync_status != 0 )); then
             echo "::error::repo sync failed with exit code ${sync_status}"
             echo "Relevant sync errors:"
             grep -Ei 'error:|fatal:|failed to|not found|no space left|RPC failed|timed out|could not resolve|connection reset|authentication failed' "$sync_log" | tail -100 || true
             echo "Disk after failed source sync:"
-            df -hT "$GITHUB_WORKSPACE" /
+            df -hT "$ANDROID_TOP" "$GITHUB_WORKSPACE" /
             echo "Size of repo metadata:"
             du -sh .repo .repo/project-objects .repo/projects 2>/dev/null || true
             exit "$sync_status"
@@ -207,7 +265,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          cd "$GITHUB_WORKSPACE/android"
+          cd "$ANDROID_TOP"
           artifact_dir="$RUNNER_TEMP/deen-kernel-artifact"
           mkdir -p "$artifact_dir"
 
@@ -267,7 +325,7 @@ jobs:
         run: |
           # Avoid Bash nounset: the legacy Android 12 envsetup reads optional vars.
           set -eo pipefail
-          cd "$GITHUB_WORKSPACE/android"
+          cd "$ANDROID_TOP"
           if [[ "$CLEAN_BUILD" == "true" ]]; then
             rm -rf out
           fi
@@ -276,28 +334,33 @@ jobs:
           # Parse/validate the product while Git metadata is intact.
           m nothing
           echo "Disk before build-space check:"
-          du -sh .repo .repo/project-objects .repo/projects .ccache out 2>/dev/null || true
-          df -hT "$GITHUB_WORKSPACE" /
-          avail_kib="$(df --output=avail "$GITHUB_WORKSPACE" | awk 'NR==2 {print $1}')"
-          if (( avail_kib < 26214400 )); then
-            echo "::warning::Less than 25 GiB free after lunch. Clear compiler cache first; do not delete .repo/project-objects because project Git checkouts can depend on those objects."
+          du -sh .repo .repo/project-objects .repo/projects "$CCACHE_DIR" out 2>/dev/null || true
+          df -hT "$ANDROID_TOP" "$GITHUB_WORKSPACE" /
+          android_avail_kib="$(df --output=avail "$ANDROID_TOP" | awk 'NR==2 {print $1}')"
+          workspace_avail_kib="$(df --output=avail "$GITHUB_WORKSPACE" | awk 'NR==2 {print $1}')"
+          if (( workspace_avail_kib < 15 * 1024 * 1024 )); then
+            echo "::warning::Less than 15 GiB remain on the metadata/cache volume; clearing ccache only (not .repo/project-objects)."
             ccache -C || true
-            avail_kib="$(df --output=avail "$GITHUB_WORKSPACE" | awk 'NR==2 {print $1}')"
-            if (( avail_kib < 26214400 )); then
-              avail_gib=$((avail_kib / 1024 / 1024))
-              echo "::error::Only ${avail_gib} GiB remain. Aborting before compilation rather than corrupting Git metadata or exhausting the runner disk."
-              exit 1
-            fi
+            workspace_avail_kib="$(df --output=avail "$GITHUB_WORKSPACE" | awk 'NR==2 {print $1}')"
+          fi
+          if (( android_avail_kib < 30 * 1024 * 1024 )); then
+            android_avail_gib=$((android_avail_kib / 1024 / 1024))
+            echo "::error::Only ${android_avail_gib} GiB remain on the Android worktree/build volume. Need at least 30 GiB before compiling."
+            exit 1
+          fi
+          if (( workspace_avail_kib < 8 * 1024 * 1024 )); then
+            echo "::error::The .repo/ccache volume has less than 8 GiB free; refusing to start compilation."
+            exit 1
           fi
           echo "Disk before compiling ROM:"
-          df -hT "$GITHUB_WORKSPACE" /
+          df -hT "$ANDROID_TOP" "$GITHUB_WORKSPACE" /
           mka bacon -j"$ANDROID_JOBS"
 
       - name: Verify ROM ZIP exists and calculate SHA-256
         shell: bash
         run: |
           set -euo pipefail
-          out="$GITHUB_WORKSPACE/android/out/target/product/deen"
+          out="$ANDROID_TOP/out/target/product/deen"
           shopt -s nullglob
           zips=("$out"/*lineage*.zip "$out"/*deen*.zip)
           if (( ${#zips[@]} == 0 )); then
@@ -336,4 +399,4 @@ jobs:
         shell: bash
         run: |
           ccache -s || true
-          df -hT || true
+          df -hT "$ANDROID_TOP" "$GITHUB_WORKSPACE" / || true
