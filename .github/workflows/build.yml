@@ -354,7 +354,18 @@ jobs:
           fi
           echo "Disk before compiling ROM:"
           df -hT "$ANDROID_TOP" "$GITHUB_WORKSPACE" /
-          mka bacon -j"$ANDROID_JOBS"
+          build_log="$RUNNER_TEMP/lineage-build.log"
+          echo "Build log: $build_log"
+          mka bacon -j"$ANDROID_JOBS" 2>&1 | tee "$build_log"
+
+      - name: Upload ROM build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: deen-lineage19-build-log-${{ github.run_id }}
+          path: ${{ runner.temp }}/lineage-build.log
+          if-no-files-found: warn
+          retention-days: 7
 
       - name: Verify ROM ZIP exists and calculate SHA-256
         shell: bash
