@@ -39,7 +39,7 @@ jobs:
       CCACHE_EXEC: ccache
       CCACHE_DIR: ${{ github.workspace }}/.ccache
       CCACHE_MAXSIZE: 8G
-      ANDROID_JOBS: "4"
+      ANDROID_JOBS: "2"
 
     steps:
       # Must precede checkout: this action remounts the workspace volume.
@@ -48,7 +48,7 @@ jobs:
         with:
           root-reserve-mb: 512
           temp-reserve-mb: 128
-          swap-size-mb: 1024
+          swap-size-mb: 4096
           remove-dotnet: "true"
           remove-android: "true"
           remove-haskell: "true"
@@ -355,7 +355,34 @@ jobs:
           echo "Disk before compiling ROM:"
           df -hT "$ANDROID_TOP" "$GITHUB_WORKSPACE" /
           build_log="$RUNNER_TEMP/lineage-build.log"
+          resource_log="$RUNNER_TEMP/lineage-resource.log"
           echo "Build log: $build_log"
+          echo "Resource monitor log: $resource_log"
+          {
+            echo "=== Initial build resource snapshot ==="
+            date -u
+            free -h
+            swapon --show
+            vmstat -s | head -20
+            df -hT "$ANDROID_TOP" "$GITHUB_WORKSPACE" /
+          } | tee "$resource_log"
+          (
+            while sleep 60; do
+              {
+                echo "=== Resource snapshot $(date -u +%Y-%m-%dT%H:%M:%SZ) ==="
+                free -h
+                swapon --show
+                ps -eo pid,ppid,comm,rss --sort=-rss | head -20
+                df -hT "$ANDROID_TOP" "$GITHUB_WORKSPACE" /
+              } | tee -a "$resource_log"
+            done
+          ) &
+          monitor_pid=$!
+          cleanup_monitor() {
+            kill "$monitor_pid" 2>/dev/null || true
+            wait "$monitor_pid" 2>/dev/null || true
+          }
+          trap cleanup_monitor EXIT
           mka bacon -j"$ANDROID_JOBS" 2>&1 | tee "$build_log"
 
       - name: Upload ROM build log on failure
@@ -363,7 +390,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: deen-lineage19-build-log-${{ github.run_id }}
-          path: ${{ runner.temp }}/lineage-build.log
+          path: |
+            ${{ runner.temp }}/lineage-build.log
+            ${{ runner.temp }}/lineage-resource.log
           if-no-files-found: warn
           retention-days: 7
 
