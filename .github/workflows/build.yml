@@ -320,7 +320,7 @@ jobs:
           rm -rf "$artifact_dir" "$RUNNER_TEMP/deen-kernel-artifact.zip"
           echo "Kernel image and exported headers staged."
           df -hT "$GITHUB_WORKSPACE" /
-      - name: Build ROM
+      - name: Bootstrap Android environment and Soong
         shell: bash
         env:
           CLEAN_BUILD: ${{ inputs.clean_build || false }}
@@ -328,12 +328,96 @@ jobs:
           # Android 12 envsetup.sh is not compatible with nounset (-u).
           set -Eeo pipefail
           cd "$ANDROID_TOP"
+          bootstrap_log="$RUNNER_TEMP/lineage-bootstrap.log"
+          resource_log="$RUNNER_TEMP/lineage-bootstrap-resource.log"
+          : > "$bootstrap_log"
+          : > "$resource_log"
+          exec > >(tee -a "$bootstrap_log") 2>&1
+
+          snapshot_resources() {
+            echo "=== Resource snapshot $(date -u +%Y-%m-%dT%H:%M:%SZ) ==="
+            free -h || true
+            swapon --show || true
+            cat /proc/pressure/memory 2>/dev/null || true
+            echo "--- cgroup memory ---"
+            for f in /sys/fs/cgroup/memory.current /sys/fs/cgroup/memory.max /sys/fs/cgroup/memory.events /sys/fs/cgroup/memory.swap.current /sys/fs/cgroup/memory.swap.max /sys/fs/cgroup/memory/memory.failcnt /sys/fs/cgroup/memory/memory.oom_control; do
+              if [[ -r "$f" ]]; then
+                echo "[$f]"
+                cat "$f" || true
+              fi
+            done
+            echo "--- largest processes (RSS KiB) ---"
+            ps -eo pid,ppid,comm,rss --sort=-rss | head -20 || true
+            echo "--- storage ---"
+            df -hT "$ANDROID_TOP" "$GITHUB_WORKSPACE" / || true
+          }
+
+          monitor_resources() {
+            trap 'exit 0' TERM INT
+            while sleep 30; do
+              snapshot_resources >> "$resource_log" 2>&1 || true
+              echo "::notice::Soong bootstrap resource monitor at $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+              tail -n 14 "$resource_log" || true
+            done
+          }
+
+          echo "Bootstrap log: $bootstrap_log"
+          echo "Resource log: $resource_log"
+          echo "Runner CPUs: $(nproc)"
+          snapshot_resources | tee "$resource_log"
+          monitor_resources &
+          monitor_pid=$!
+          cleanup_monitor() {
+            local status=$?
+            trap - EXIT
+            kill "$monitor_pid" 2>/dev/null || true
+            wait "$monitor_pid" 2>/dev/null || true
+            echo "Soong bootstrap shell exit status: $status"
+            exit "$status"
+          }
+          trap cleanup_monitor EXIT
+
+          if [[ "$CLEAN_BUILD" == "true" ]]; then
+            echo "::warning::Clean build requested; removing out/."
+            rm -rf out
+          fi
+
+          echo "===== Phase 1/2: environment setup and Soong bootstrap ====="
+          source build/envsetup.sh
+          lunch lineage_deen-userdebug
+          echo "Starting memory-constrained Soong bootstrap: m -j1 nothing"
+          GOMAXPROCS=2 m -j1 nothing
+          test -s out/soong/build.ninja
+          echo "Soong bootstrap completed; out/soong/build.ninja exists."
+
+      - name: Upload Soong bootstrap diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: deen-lineage19-bootstrap-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/lineage-bootstrap.log
+            ${{ runner.temp }}/lineage-bootstrap-resource.log
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Save ccache after Soong bootstrap
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: .ccache
+          key: deen-lineage19-ccache-${{ runner.os }}-${{ github.ref_name }}-bootstrap-${{ github.sha }}
+
+      - name: Build ROM
+        shell: bash
+        run: |
+          # Re-source envsetup in each Actions step; shell functions do not persist between steps.
+          set -Eeo pipefail
+          cd "$ANDROID_TOP"
           build_log="$RUNNER_TEMP/lineage-build.log"
           resource_log="$RUNNER_TEMP/lineage-resource.log"
           : > "$build_log"
           : > "$resource_log"
-          # Capture every command, including envsetup, lunch and the Soong
-          # bootstrap. Previously m nothing ran before logging/monitoring began.
           exec > >(tee -a "$build_log") 2>&1
 
           snapshot_resources() {
@@ -358,7 +442,7 @@ jobs:
             trap 'exit 0' TERM INT
             while sleep 30; do
               snapshot_resources >> "$resource_log" 2>&1 || true
-              echo "::notice::Build resource monitor heartbeat at $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+              echo "::notice::ROM compilation resource monitor at $(date -u +%Y-%m-%dT%H:%M:%SZ)"
               tail -n 14 "$resource_log" || true
             done
           }
@@ -375,27 +459,12 @@ jobs:
             trap - EXIT
             kill "$monitor_pid" 2>/dev/null || true
             wait "$monitor_pid" 2>/dev/null || true
-            echo "Build shell exit status: $status"
+            echo "ROM build shell exit status: $status"
             exit "$status"
           }
           trap cleanup_monitor EXIT
 
-          if [[ "$CLEAN_BUILD" == "true" ]]; then
-            echo "::warning::Clean build requested; removing out/."
-            rm -rf out
-          fi
-
-          echo "===== Phase 1/2: environment setup and Soong bootstrap ====="
-          source build/envsetup.sh
-          lunch lineage_deen-userdebug
-          # AOSP/Soong's final bootstrap step analyzes Android.bp and can be
-          # memory-intensive. Limit Ninja to one task here; the old command
-          # used the runner default and ignored ANDROID_JOBS=2.
-          echo "Starting memory-constrained Soong bootstrap: m -j1 nothing"
-          GOMAXPROCS=2 m -j1 nothing
           test -s out/soong/build.ninja
-          echo "Soong bootstrap completed; out/soong/build.ninja exists."
-
           echo "===== Phase 2/2: ROM compilation ====="
           echo "Disk before build-space check:"
           du -sh .repo .repo/project-objects .repo/projects "$CCACHE_DIR" out 2>/dev/null || true
@@ -418,6 +487,9 @@ jobs:
           fi
           echo "Disk before compiling ROM:"
           df -hT "$ANDROID_TOP" "$GITHUB_WORKSPACE" /
+          echo "ROM build started at $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          source build/envsetup.sh
+          lunch lineage_deen-userdebug
           mka bacon -j"$ANDROID_JOBS"
 
       - name: Upload ROM build log on failure
@@ -428,6 +500,8 @@ jobs:
           path: |
             ${{ runner.temp }}/lineage-build.log
             ${{ runner.temp }}/lineage-resource.log
+            ${{ runner.temp }}/lineage-bootstrap.log
+            ${{ runner.temp }}/lineage-bootstrap-resource.log
           if-no-files-found: warn
           retention-days: 7
 
