@@ -11,7 +11,9 @@ This procedure builds the complete LineageOS 19.1 ROM, not just the kernel or st
 
 ## Host capacity
 
-Use a Linux x86-64 build host with ample RAM and at least 200 GB of free disk space (more is safer). Standard hosted CI runners generally do not provide a dependable amount of disk space for a full Android source sync plus build output; do not start a full build on a runner until free disk space is verified.
+Use a Linux x86-64 build host with ample RAM and at least 200 GB of free disk space (more is safer). The GitHub Actions workflow checks the usable space before syncing and uses two separate runner filesystems when available: the Android working tree/build output is placed under `RUNNER_TEMP/android`, while Repo's Git object database and metadata are bind-mounted at `GITHUB_WORKSPACE/.repo`. This allows the source tree and build output to use the runner's root filesystem while keeping Repo metadata and ccache on the workspace volume.
+
+The workflow refuses to sync unless the two paths are on different filesystems, each has at least 70 GiB free, and their combined free space is at least 200 GiB. During the build it also checks the remaining space on both volumes. A runner with only one small workspace volume is not sufficient; use a larger runner or a self-hosted Linux x86-64 host in that case.
 
 Install the Android/LineageOS host dependencies from the LineageOS build documentation, and install Google's `repo` tool.
 
