@@ -39,7 +39,7 @@ jobs:
       CCACHE_EXEC: ccache
       CCACHE_DIR: ${{ github.workspace }}/.ccache
       CCACHE_MAXSIZE: 8G
-      ANDROID_JOBS: "2"
+      ANDROID_JOBS: "1"
 
     steps:
       # Must precede checkout: this action remounts the workspace volume.
@@ -116,6 +116,26 @@ jobs:
           df -hT "$ANDROID_TOP"
           echo "Repo metadata volume:"
           df -hT "$ANDROID_TOP/.repo"
+
+      - name: Configure compressed zram swap for Android 12 build
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The standard hosted runner has limited physical RAM. Add compressed
+          # RAM-backed swap on top of the 8 GiB disk swap configured above.
+          sudo modprobe zram num_devices=1
+          zram_device="$(sudo zramctl --find --size 12G --algorithm lz4)"
+          if [[ -z "$zram_device" || ! -b "$zram_device" ]]; then
+            echo "::error::Could not allocate a zram block device."
+            exit 1
+          fi
+          sudo mkswap "$zram_device"
+          sudo swapon --priority 100 "$zram_device"
+          echo "Active swap devices:"
+          swapon --show
+          echo "Memory after zram activation:"
+          free -h
+          test "$(awk 'NR>1 {sum += $3} END {print sum+0}' /proc/swaps)" -gt 0
 
       - name: Install host dependencies
         shell: bash
@@ -372,6 +392,8 @@ jobs:
                 cat "$f" || true
               fi
             done
+            echo "--- kernel OOM evidence ---"
+            dmesg -T 2>/dev/null | grep -Ei "out of memory|oom-kill|killed process" | tail -n 30 || true
             echo "--- largest processes (RSS KiB) ---"
             ps -eo pid,ppid,comm,rss --sort=-rss | head -20 || true
             echo "--- storage ---"
@@ -390,6 +412,7 @@ jobs:
           echo "Bootstrap log: $bootstrap_log"
           echo "Resource log: $resource_log"
           echo "Runner CPUs: $(nproc)"
+          echo "Configured Go parallelism: GOMAXPROCS=1; Make/Ninja parallelism: 1"
           snapshot_resources | tee "$resource_log"
           monitor_resources &
           monitor_pid=$!
@@ -412,7 +435,7 @@ jobs:
           source build/envsetup.sh
           lunch lineage_deen-userdebug
           echo "Starting memory-constrained Soong bootstrap: m -j1 nothing"
-          GOMAXPROCS=2 m -j1 nothing
+          GOMAXPROCS=1 m -j1 nothing
           test -s out/soong/build.ninja
           echo "Soong bootstrap completed; out/soong/build.ninja exists."
 
