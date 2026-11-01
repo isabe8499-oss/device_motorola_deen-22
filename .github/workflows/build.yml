@@ -182,6 +182,7 @@ jobs:
 
       - name: Sync Android source
         shell: bash
+        timeout-minutes: 25
         run: |
           set -Eeuo pipefail
           cd "$ANDROID_TOP"
