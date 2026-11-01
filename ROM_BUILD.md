@@ -13,7 +13,7 @@ This procedure builds the complete LineageOS 19.1 ROM, not just the kernel or st
 
 Use a Linux x86-64 build host with ample RAM and at least 200 GB of free disk space (more is safer). The GitHub Actions workflow checks the usable space before syncing and uses two separate runner filesystems when available: the Android working tree/build output is placed under `RUNNER_TEMP/android`, while Repo's Git object database and metadata are bind-mounted at `GITHUB_WORKSPACE/.repo`. This allows the source tree and build output to use the runner's root filesystem while keeping Repo metadata and ccache on the workspace volume.
 
-The workflow refuses to sync unless the two paths are on different filesystems, each has at least 70 GiB free, and their combined free space is at least 200 GiB. During the build it also checks the remaining space on both volumes. A runner with only one small workspace volume is not sufficient; use a larger runner or a self-hosted Linux x86-64 host in that case.
+The workflow refuses to sync unless the two paths are on different filesystems, each has at least 70 GiB free, and their combined free space is at least 190 GiB (200 GiB or more is preferable). During the build it also checks the remaining space on both volumes. A runner with only one small workspace volume is not sufficient; use a larger runner or a self-hosted Linux x86-64 host in that case.
 
 Install the Android/LineageOS host dependencies from the LineageOS build documentation, and install Google's `repo` tool.
 
@@ -40,14 +40,14 @@ The local manifest defines a separate `deen-github` remote so the owner/reposito
 
 ## Build and stage the kernel
 
-The existing successful kernel workflow is [run 40789837157](https://github.com/isabe8499-oss/kernel_motorola_msm8953-22/actions/runs/40789837157). Its artifact is currently named `deen-susfs23-12` and contains the built kernel image, generated config, and exported headers. The device-tree preflight now refuses to pass if the kernel branch HEAD has no matching successful, unexpired artifact.
+The verified kernel artifact is produced by [kernel workflow run 40820488471](https://github.com/isabe8499-oss/kernel_motorola_msm8953-22/actions/runs/40820488471), under the stable artifact name `deen-susfs23`. It contains the built image, generated config, exported headers, SUSFS/NoMount headers, and `kernel-build-metadata.txt`. The ROM workflow checks that the artifact's kernel source commit matches the synced kernel branch before staging it.
 
 You can download that artifact with GitHub CLI from a Linux build host:
 
 ```bash
-gh run download 40789837157 \
+gh run download 40820488471 \
   --repo isabe8499-oss/kernel_motorola_msm8953-22 \
-  --name deen-susfs23-12 \
+  --name deen-susfs23 \
   --dir /tmp/deen-kernel-artifact
 ```
 
@@ -75,7 +75,7 @@ From the Android source root:
 bash device/motorola/deen/scripts/build-lineage19.sh
 ```
 
-The script checks source branches, kernel version, staged image/headers, and key kernel config flags before invoking `lunch lineage_deen-userdebug` and `mka bacon`.
+The script checks the device and kernel branches, kernel version, staged image/headers, and required kernel config flags before invoking `lunch lineage_deen-userdebug` and `mka bacon` with bounded parallelism. The script deliberately avoids Bash `nounset` while sourcing Android 12's `envsetup.sh`.
 
 ## Validation boundary
 

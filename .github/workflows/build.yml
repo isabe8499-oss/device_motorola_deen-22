@@ -172,6 +172,7 @@ jobs:
             <remote name="deen-github" fetch="https://github.com/" />
             <project name="isabe8499-oss/device_motorola_deen-22" path="device/motorola/deen" remote="deen-github" revision="lineage-19.1" />
             <project name="Vhmit/vendor_motorola_deen" path="vendor/motorola/deen" remote="deen-github" revision="lineage-19.1" />
+            <project name="isabe8499-oss/kernel_motorola_msm8953-22" path="kernel/motorola/msm8953" remote="deen-github" revision="bakasu-susfs23-deen" />
           </manifest>
           XML
           python3 - <<'PY'
@@ -237,7 +238,9 @@ jobs:
           # repo leaves synchronized projects detached at pinned commits; create
           # a local branch label for the device tree without changing its commit.
           git -C device/motorola/deen switch -C lineage-19.1
+          git -C kernel/motorola/msm8953 switch -C bakasu-susfs23-deen
           test -s device/motorola/deen/lineage_deen.mk
+          test -s kernel/motorola/msm8953/Makefile
           test -s vendor/motorola/deen/deen-vendor.mk
           # The LFS cache duplicates payloads already materialized in the tree.
           echo "Disk before LFS cache cleanup:"
@@ -298,6 +301,28 @@ jobs:
             exit 1
           fi
           echo "Using kernel config: $config"
+          metadata="$(find "$artifact_dir" -type f -name 'kernel-build-metadata.txt' -print -quit)"
+          if [[ -z "$metadata" || ! -s "$metadata" ]]; then
+            echo "::error::Kernel artifact is missing kernel-build-metadata.txt"
+            find "$artifact_dir" -maxdepth 6 -type f -print | sort
+            exit 1
+          fi
+          artifact_kernel_version="$(awk -F= '$1=="kernel_version" {print $2; exit}' "$metadata")"
+          artifact_kernel_commit="$(awk -F= '$1=="kernel_source_commit" {print $2; exit}' "$metadata")"
+          kernel_source="$ANDROID_TOP/kernel/motorola/msm8953"
+          actual_kernel_commit="$(git -C "$kernel_source" rev-parse HEAD)"
+          actual_kernel_version="$(make -s -C "$kernel_source" kernelversion)"
+          if [[ "$artifact_kernel_version" != "4.19.325" || "$actual_kernel_version" != "$artifact_kernel_version" ]]; then
+            echo "::error::Kernel version mismatch: artifact=$artifact_kernel_version source=$actual_kernel_version"
+            exit 1
+          fi
+          if [[ -z "$artifact_kernel_commit" || "$actual_kernel_commit" != "$artifact_kernel_commit" ]]; then
+            echo "::error::Kernel artifact/source commit mismatch: artifact=$artifact_kernel_commit source=$actual_kernel_commit"
+            exit 1
+          fi
+          mkdir -p "$kernel_source/out"
+          install -m 0644 "$config" "$kernel_source/out/.config"
+          echo "Verified kernel metadata: version=$artifact_kernel_version commit=$artifact_kernel_commit"
           test -n "$headers" && test -d "$headers"
           test -n "$susfs_header" && test -s "$susfs_header"
           test -n "$nomount_header" && test -s "$nomount_header"
@@ -489,9 +514,7 @@ jobs:
           echo "Disk before compiling ROM:"
           df -hT "$ANDROID_TOP" "$GITHUB_WORKSPACE" /
           echo "ROM build started at $(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          source build/envsetup.sh
-          lunch lineage_deen-userdebug
-          mka bacon -j"$ANDROID_JOBS"
+          ANDROID_JOBS="$ANDROID_JOBS" bash device/motorola/deen/scripts/build-lineage19.sh
 
       - name: Upload ROM build log on failure
         if: failure()

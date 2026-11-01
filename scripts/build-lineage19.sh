@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Build LineageOS 19.1 for Motorola One (deen) from an initialized Android tree.
 # Run from the Android source root: bash device/motorola/deen/scripts/build-lineage19.sh
-set -euo pipefail
+set -Eeo pipefail
 
 ANDROID_TOP="$(pwd -P)"
 DEVICE_DIR="${ANDROID_TOP}/device/motorola/deen"
@@ -12,9 +12,12 @@ EXPECTED_KERNEL_BRANCH="bakasu-susfs23-deen"
 
 fail() { echo "ERROR: $*" >&2; exit 1; }
 
+ANDROID_JOBS="${ANDROID_JOBS:-2}"
+[[ "${ANDROID_JOBS}" =~ ^[1-9][0-9]*$ ]] || fail "ANDROID_JOBS must be a positive integer."
+
 [[ -f "${ANDROID_TOP}/build/envsetup.sh" ]] || fail "Run this from the Android source root (build/envsetup.sh not found)."
 [[ -f "${DEVICE_DIR}/lineage_deen.mk" ]] || fail "Device tree not found at ${DEVICE_DIR}."
-[[ -d "${KERNEL_DIR}/.git" ]] || fail "Kernel source checkout not found at ${KERNEL_DIR}."
+[[ -e "${KERNEL_DIR}/.git" ]] || fail "Kernel source checkout not found at ${KERNEL_DIR}."
 [[ -s "${STAGED_DIR}/Image.gz-dtb" ]] || fail "Staged kernel image missing: ${STAGED_DIR}/Image.gz-dtb."
 [[ -d "${STAGED_DIR}/kernel-headers/include" ]] || fail "Staged exported kernel headers missing."
 
@@ -40,7 +43,7 @@ echo "Preparing LineageOS product lineage_deen-userdebug..."
 # shellcheck disable=SC1091
 source "${ANDROID_TOP}/build/envsetup.sh"
 lunch lineage_deen-userdebug
-mka bacon
+mka bacon -j"${ANDROID_JOBS}"
 
 OUT_DIR="${ANDROID_TOP}/out/target/product/deen"
 echo "ROM build command completed. Inspect output at: ${OUT_DIR}"
