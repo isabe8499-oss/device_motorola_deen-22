@@ -16,13 +16,14 @@ on:
       - "ROM_BUILD.md"
       - "scripts/build-lineage19.sh"
       - "scripts/stage-kernel.sh"
+      - "scripts/publish-ci-diagnostics.sh"
       - "lineage_deen.mk"
       - "BoardConfig.mk"
       - "device.mk"
       - "lineage.dependencies"
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: deen-lineage19-rom-${{ github.ref }}
@@ -391,6 +392,7 @@ jobs:
       - name: Bootstrap Android environment and Soong
         shell: bash
         env:
+          GH_TOKEN: ${{ github.token }}
           CLEAN_BUILD: ${{ inputs.clean_build || false }}
         run: |
           # Android 12 envsetup.sh is not compatible with nounset (-u).
@@ -436,6 +438,14 @@ jobs:
           echo "Runner CPUs: $(nproc)"
           echo "Configured Go parallelism: GOMAXPROCS=1; Make/Ninja parallelism: 1"
           snapshot_resources | tee "$resource_log"
+          diagnostic_script="$ANDROID_TOP/device/motorola/deen/scripts/publish-ci-diagnostics.sh"
+          diag_pid=""
+          if [[ -f "$diagnostic_script" ]]; then
+            bash "$diagnostic_script" "soong-bootstrap" "$bootstrap_log" &
+            diag_pid=$!
+          else
+            echo "::warning::Persistent diagnostics script is missing; continuing without remote telemetry."
+          fi
           monitor_resources &
           monitor_pid=$!
           cleanup_monitor() {
@@ -443,6 +453,10 @@ jobs:
             trap - EXIT
             kill "$monitor_pid" 2>/dev/null || true
             wait "$monitor_pid" 2>/dev/null || true
+            if [[ -n "${diag_pid:-}" ]]; then
+              kill -TERM "$diag_pid" 2>/dev/null || true
+              wait "$diag_pid" 2>/dev/null || true
+            fi
             echo "Soong bootstrap shell exit status: $status"
             exit "$status"
           }
@@ -481,6 +495,8 @@ jobs:
 
       - name: Build ROM
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           # Re-source envsetup in each Actions step; shell functions do not persist between steps.
           set -Eeo pipefail
@@ -523,6 +539,14 @@ jobs:
           echo "Runner CPUs: $(nproc)"
           echo "Configured ROM parallelism: $ANDROID_JOBS"
           snapshot_resources | tee "$resource_log"
+          diagnostic_script="$ANDROID_TOP/device/motorola/deen/scripts/publish-ci-diagnostics.sh"
+          diag_pid=""
+          if [[ -f "$diagnostic_script" ]]; then
+            bash "$diagnostic_script" "rom-build" "$build_log" &
+            diag_pid=$!
+          else
+            echo "::warning::Persistent diagnostics script is missing; continuing without remote telemetry."
+          fi
           monitor_resources &
           monitor_pid=$!
           cleanup_monitor() {
@@ -530,6 +554,10 @@ jobs:
             trap - EXIT
             kill "$monitor_pid" 2>/dev/null || true
             wait "$monitor_pid" 2>/dev/null || true
+            if [[ -n "${diag_pid:-}" ]]; then
+              kill -TERM "$diag_pid" 2>/dev/null || true
+              wait "$diag_pid" 2>/dev/null || true
+            fi
             echo "ROM build shell exit status: $status"
             exit "$status"
           }
