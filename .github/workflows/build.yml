@@ -117,26 +117,48 @@ jobs:
           echo "Repo metadata volume:"
           df -hT "$ANDROID_TOP/.repo"
 
-      - name: Configure compressed zram swap for Android 12 build
+      - name: Configure optional compressed zram swap
         shell: bash
         run: |
           set -euo pipefail
-          # The standard hosted runner has limited physical RAM. Add compressed
-          # RAM-backed swap on top of the 8 GiB disk swap configured above.
-          sudo modprobe zram num_devices=1
-          zram_device="$(sudo zramctl --find --size 12G --algorithm lz4)"
-          if [[ -z "$zram_device" || ! -b "$zram_device" ]]; then
-            echo "::error::Could not allocate a zram block device."
+          echo "Swap configured by the disk-space action:"
+          swapon --show
+          free -h
+          if ! awk 'NR>1 { found=1 } END { exit !found }' /proc/swaps; then
+            echo "::error::The 8 GiB disk swap expected from the disk-space step is not active."
             exit 1
           fi
-          sudo mkswap "$zram_device"
-          sudo swapon --priority 100 "$zram_device"
-          echo "Active swap devices:"
+          # zram is an optional optimization: some GitHub runner kernels do not
+          # ship the module. Its absence must never block the ROM build.
+          if ! command -v zramctl >/dev/null 2>&1; then
+            echo "::warning::zramctl is unavailable; continuing with disk swap only."
+            exit 0
+          fi
+          if ! sudo modprobe zram num_devices=1; then
+            echo "::warning::The runner kernel has no loadable zram module; continuing with disk swap only."
+            exit 0
+          fi
+          zram_output=""
+          if ! zram_output="$(sudo zramctl --find --size 12G --algorithm lz4 2>&1)"; then
+            printf '%s\n' "$zram_output"
+            echo "::warning::Could not allocate zram; continuing with disk swap only."
+            exit 0
+          fi
+          zram_device="$zram_output"
+          if [[ -z "$zram_device" || ! -b "$zram_device" ]]; then
+            echo "::warning::No usable zram block device was returned; continuing with disk swap only."
+            exit 0
+          fi
+          if ! sudo mkswap "$zram_device" || ! sudo swapon --priority 100 "$zram_device"; then
+            sudo swapoff "$zram_device" 2>/dev/null || true
+            sudo zramctl --reset "$zram_device" 2>/dev/null || true
+            echo "::warning::Could not activate zram; continuing with disk swap only."
+            exit 0
+          fi
+          echo "Active swap devices after optional zram setup:"
           swapon --show
-          echo "Memory after zram activation:"
+          echo "Memory after optional zram setup:"
           free -h
-          test "$(awk 'NR>1 {sum += $3} END {print sum+0}' /proc/swaps)" -gt 0
-
       - name: Install host dependencies
         shell: bash
         run: |

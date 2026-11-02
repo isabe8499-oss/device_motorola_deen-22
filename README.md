@@ -24,3 +24,8 @@ Camera  | 13 MP, 2160 pixels, panorama,depth sensor, PDAF ,flash LED
 ## Device Picture
 
 ![Motorola One](https://files.tecnoblog.net/wp-content/uploads/2025/01/motorola-one-branco.png "Motorola One")
+
+## Build and community status
+
+- [Community handoff and verified artifacts](COMMUNITY_HANDOFF.md)
+- [Reproducible LineageOS 19.1 build instructions](ROM_BUILD.md)
