@@ -12,6 +12,7 @@ log_file="${2:-}"
 diag_root="$RUNNER_TEMP/deen-ci-diagnostics-repo"
 remote_branch="ci-diagnostics/run-$GITHUB_RUN_ID"
 android_top="${ANDROID_TOP:-$PWD}"
+out_dir="${OUT_DIR:-$android_top/out}"
 sleep_pid=""
 
 if ! command -v gh >/dev/null 2>&1 || [[ -z "${GH_TOKEN:-}" ]]; then
@@ -59,7 +60,10 @@ publish_snapshot() {
     done
     echo
     echo "## Disk"
-    df -hT "$android_top" "${GITHUB_WORKSPACE:-$PWD}" / 2>&1 || true
+    df -hT "$android_top" "$out_dir" "${GITHUB_WORKSPACE:-$PWD}" / 2>&1 || true
+    echo
+    echo "## Output directory usage"
+    du -sh "$out_dir" 2>&1 || true
     echo
     echo "## Largest processes (RSS KiB)"
     ps -eo pid,ppid,stat,comm,rss --sort=-rss 2>/dev/null | head -20 || true
@@ -68,15 +72,15 @@ publish_snapshot() {
     dmesg -T 2>/dev/null | grep -Ei 'out of memory|oom-kill|killed process' | tail -20 || true
     echo
     echo "## Soong output markers"
-    for f in "$android_top/out/soong/build.ninja" "$android_top/out/soong/soong_build"; do
+    for f in "$out_dir/soong/build.ninja" "$out_dir/soong/soong_build"; do
       if [[ -e "$f" ]]; then
         stat -c '%n | %s bytes | modified %y' "$f" 2>/dev/null || true
       else
         echo "Not present: $f"
       fi
     done
-    if [[ -d "$android_top/out/soong" ]]; then
-      find "$android_top/out/soong" -maxdepth 1 -type f -printf '%TY-%Tm-%Td %TH:%TM:%TS %s %f\n' 2>/dev/null | sort | tail -20 || true
+    if [[ -d "$out_dir/soong" ]]; then
+      find "$out_dir/soong" -maxdepth 1 -type f -printf '%TY-%Tm-%Td %TH:%TM:%TS %s %f\n' 2>/dev/null | sort | tail -20 || true
     fi
     echo
     if command -v ccache >/dev/null 2>&1; then

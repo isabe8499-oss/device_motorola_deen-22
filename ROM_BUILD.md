@@ -82,3 +82,8 @@ The script checks the device and kernel branches, kernel version, staged image/h
 ## Validation boundary
 
 A successful build must produce a ROM ZIP under `out/target/product/deen`. Before flashing, inspect the package contents and boot image metadata, retain a known-good boot/recovery path, and verify hardware functions on the actual phone. Build success alone does not prove bootability, full hardware functionality, or Play Integrity certification.
+
+
+## Split-volume output placement
+
+The workflow sets `OUT_DIR=$GITHUB_WORKSPACE/android-out`, `TMPDIR=$GITHUB_WORKSPACE/android-tmp`, and `GOCACHE=$GITHUB_WORKSPACE/go-cache`. The #35 diagnostic showed only 2.5 GiB free on `/` while Soong bootstrap wrote under the source tree. This change relocates generated output and Go temporary data to the separate workspace logical volume. It does not guarantee the remaining workspace capacity will fit the entire ROM; monitor disk usage during the next run.

@@ -45,6 +45,7 @@ source "${ANDROID_TOP}/build/envsetup.sh"
 lunch lineage_deen-userdebug
 mka bacon -j"${ANDROID_JOBS}"
 
-OUT_DIR="${ANDROID_TOP}/out/target/product/deen"
+BUILD_OUT="${OUT_DIR:-${ANDROID_TOP}/out}"
+ROM_PRODUCT_OUT="${BUILD_OUT}/target/product/deen"
 echo "ROM build command completed. Inspect output at: ${OUT_DIR}"
-find "${OUT_DIR}" -maxdepth 1 -type f \( -name '*lineage*.zip' -o -name 'boot.img' -o -name 'vendor_boot.img' -o -name 'dtbo.img' \) -printf '%f %s bytes\n' 2>/dev/null || true
+find "${ROM_PRODUCT_OUT}" -maxdepth 1 -type f \( -name '*lineage*.zip' -o -name 'boot.img' -o -name 'vendor_boot.img' -o -name 'dtbo.img' \) -printf '%f %s bytes\n' 2>/dev/null || true

@@ -41,6 +41,9 @@ jobs:
       CCACHE_DIR: ${{ github.workspace }}/.ccache
       CCACHE_MAXSIZE: 8G
       ANDROID_JOBS: "1"
+      OUT_DIR: ${{ github.workspace }}/android-out
+      TMPDIR: ${{ github.workspace }}/android-tmp
+      GOCACHE: ${{ github.workspace }}/go-cache
 
     steps:
       # Must precede checkout: this action remounts the workspace volume.
@@ -117,6 +120,11 @@ jobs:
           df -hT "$ANDROID_TOP"
           echo "Repo metadata volume:"
           df -hT "$ANDROID_TOP/.repo"
+          mkdir -p "$OUT_DIR" "$TMPDIR" "$GOCACHE"
+          echo "OUT_DIR=$OUT_DIR" >> "$GITHUB_ENV"
+          echo "TMPDIR=$TMPDIR" >> "$GITHUB_ENV"
+          echo "GOCACHE=$GOCACHE" >> "$GITHUB_ENV"
+          df -hT "$OUT_DIR" "$TMPDIR" "$GOCACHE"
 
       - name: Configure optional compressed zram swap
         shell: bash
@@ -235,7 +243,7 @@ jobs:
           repo version
           echo "Projects declared by the resolved manifest: $(repo list | wc -l)"
           echo "Disk before source sync:"
-          df -hT "$ANDROID_TOP" "$GITHUB_WORKSPACE" /
+          df -hT "$ANDROID_TOP" "$GITHUB_WORKSPACE" "$OUT_DIR" /
           # Four workers match the runner's usual vCPU count and the manifest's
           # sync-j setting. Retry transient network fetch failures and stop at
           # the first persistent project failure so the log identifies it.
@@ -256,7 +264,7 @@ jobs:
               sleep 60
               if kill -0 "$sync_pid" 2>/dev/null; then
                 echo "::notice::repo sync heartbeat at $(date -u +%Y-%m-%dT%H:%M:%SZ)"
-                df -hT "$ANDROID_TOP" "$GITHUB_WORKSPACE" / || true
+                df -hT "$ANDROID_TOP" "$GITHUB_WORKSPACE" "$OUT_DIR" / || true
                 tail -n 8 "$sync_log" || true
               fi
             done
@@ -273,7 +281,7 @@ jobs:
             echo "Relevant sync errors:"
             grep -Ei 'error:|fatal:|failed to|not found|no space left|RPC failed|timed out|could not resolve|connection reset|authentication failed' "$sync_log" | tail -100 || true
             echo "Disk after failed source sync:"
-            df -hT "$ANDROID_TOP" "$GITHUB_WORKSPACE" /
+            df -hT "$ANDROID_TOP" "$GITHUB_WORKSPACE" "$OUT_DIR" /
             echo "Size of repo metadata:"
             du -sh .repo .repo/project-objects .repo/projects 2>/dev/null || true
             exit "$sync_status"
@@ -421,7 +429,7 @@ jobs:
             echo "--- largest processes (RSS KiB) ---"
             ps -eo pid,ppid,comm,rss --sort=-rss | head -20 || true
             echo "--- storage ---"
-            df -hT "$ANDROID_TOP" "$GITHUB_WORKSPACE" / || true
+            df -hT "$ANDROID_TOP" "$GITHUB_WORKSPACE" "$OUT_DIR" / || true
           }
 
           monitor_resources() {
@@ -472,8 +480,8 @@ jobs:
           lunch lineage_deen-userdebug
           echo "Starting memory-constrained Soong bootstrap: m -j1 nothing"
           GOMAXPROCS=1 m -j1 nothing
-          test -s out/soong/build.ninja
-          echo "Soong bootstrap completed; out/soong/build.ninja exists."
+          test -s "$OUT_DIR/soong/build.ninja"
+          echo "Soong bootstrap completed; $OUT_DIR/soong/build.ninja exists."
 
       - name: Upload Soong bootstrap diagnostics
         if: always()
@@ -522,7 +530,7 @@ jobs:
             echo "--- largest processes (RSS KiB) ---"
             ps -eo pid,ppid,comm,rss --sort=-rss | head -20 || true
             echo "--- storage ---"
-            df -hT "$ANDROID_TOP" "$GITHUB_WORKSPACE" / || true
+            df -hT "$ANDROID_TOP" "$GITHUB_WORKSPACE" "$OUT_DIR" / || true
           }
 
           monitor_resources() {
@@ -563,11 +571,11 @@ jobs:
           }
           trap cleanup_monitor EXIT
 
-          test -s out/soong/build.ninja
+          test -s "$OUT_DIR/soong/build.ninja"
           echo "===== Phase 2/2: ROM compilation ====="
           echo "Disk before build-space check:"
-          du -sh .repo .repo/project-objects .repo/projects "$CCACHE_DIR" out 2>/dev/null || true
-          df -hT "$ANDROID_TOP" "$GITHUB_WORKSPACE" /
+          du -sh .repo .repo/project-objects .repo/projects "$CCACHE_DIR" "$OUT_DIR" "$TMPDIR" "$GOCACHE" 2>/dev/null || true
+          df -hT "$ANDROID_TOP" "$GITHUB_WORKSPACE" "$OUT_DIR" /
           android_avail_kib="$(df --output=avail "$ANDROID_TOP" | awk 'NR==2 {print $1}')"
           workspace_avail_kib="$(df --output=avail "$GITHUB_WORKSPACE" | awk 'NR==2 {print $1}')"
           if (( workspace_avail_kib < 15 * 1024 * 1024 )); then
@@ -585,7 +593,7 @@ jobs:
             exit 1
           fi
           echo "Disk before compiling ROM:"
-          df -hT "$ANDROID_TOP" "$GITHUB_WORKSPACE" /
+          df -hT "$ANDROID_TOP" "$GITHUB_WORKSPACE" "$OUT_DIR" /
           echo "ROM build started at $(date -u +%Y-%m-%dT%H:%M:%SZ)"
           ANDROID_JOBS="$ANDROID_JOBS" bash device/motorola/deen/scripts/build-lineage19.sh
 
@@ -606,7 +614,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          out="$ANDROID_TOP/out/target/product/deen"
+          out="$OUT_DIR/target/product/deen"
           shopt -s nullglob
           zips=("$out"/*lineage*.zip "$out"/*deen*.zip)
           if (( ${#zips[@]} == 0 )); then
@@ -650,7 +658,7 @@ jobs:
             echo "ccache was not installed; earlier setup/build steps did not run."
           fi
           if [[ -n "${ANDROID_TOP:-}" && -d "${ANDROID_TOP:-/nonexistent}" ]]; then
-            df -hT "$ANDROID_TOP" "$GITHUB_WORKSPACE" / || true
+            df -hT "$ANDROID_TOP" "$GITHUB_WORKSPACE" "$OUT_DIR" / || true
           else
             df -hT "$GITHUB_WORKSPACE" / || true
           fi
