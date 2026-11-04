@@ -42,7 +42,7 @@ jobs:
       CCACHE_MAXSIZE: 8G
       ANDROID_JOBS: "1"
       OUT_DIR: ${{ github.workspace }}/android-out
-      TMPDIR: ${{ github.workspace }}/android-tmp
+      TMPDIR: /tmp
       GOCACHE: ${{ github.workspace }}/go-cache
 
     steps:
