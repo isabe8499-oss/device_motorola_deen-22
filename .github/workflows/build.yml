@@ -38,12 +38,9 @@ jobs:
     env:
       USE_CCACHE: "1"
       CCACHE_EXEC: ccache
-      CCACHE_DIR: ${{ runner.temp }}/.ccache
       CCACHE_MAXSIZE: 2G
       ANDROID_JOBS: "1"
-      OUT_DIR: ${{ runner.temp }}/android-out
       TMPDIR: /tmp
-      GOCACHE: ${{ runner.temp }}/go-cache
 
     steps:
       # Must precede checkout: this action remounts the workspace volume.
@@ -105,6 +102,9 @@ jobs:
           # Soong output, Go cache and ccache on the separate root filesystem.
           export ANDROID_TOP="$GITHUB_WORKSPACE/android"
           repo_metadata="$RUNNER_TEMP/android-repo-metadata"
+          OUT_DIR="$RUNNER_TEMP/android-out"
+          GOCACHE="$RUNNER_TEMP/go-cache"
+          CCACHE_DIR="$RUNNER_TEMP/.ccache"
           mkdir -p "$ANDROID_TOP" "$repo_metadata" "$ANDROID_TOP/.repo"
           if find "$repo_metadata" -mindepth 1 -maxdepth 1 -print -quit | grep -q .; then
             echo "::error::Refusing to mount over a non-empty Repo metadata directory."
@@ -119,6 +119,9 @@ jobs:
           sudo mount --bind "$repo_metadata" "$ANDROID_TOP/.repo"
           mountpoint -q "$ANDROID_TOP/.repo"
           echo "ANDROID_TOP=$ANDROID_TOP" >> "$GITHUB_ENV"
+          echo "OUT_DIR=$OUT_DIR" >> "$GITHUB_ENV"
+          echo "GOCACHE=$GOCACHE" >> "$GITHUB_ENV"
+          echo "CCACHE_DIR=$CCACHE_DIR" >> "$GITHUB_ENV"
           echo "Android source working-tree volume:"
           df -hT "$ANDROID_TOP"
           echo "Repo metadata volume:"
