@@ -38,12 +38,12 @@ jobs:
     env:
       USE_CCACHE: "1"
       CCACHE_EXEC: ccache
-      CCACHE_DIR: ${{ github.workspace }}/.ccache
-      CCACHE_MAXSIZE: 8G
+      CCACHE_DIR: ${{ runner.temp }}/.ccache
+      CCACHE_MAXSIZE: 2G
       ANDROID_JOBS: "1"
-      OUT_DIR: ${{ github.workspace }}/android-out
+      OUT_DIR: ${{ runner.temp }}/android-out
       TMPDIR: /tmp
-      GOCACHE: ${{ github.workspace }}/go-cache
+      GOCACHE: ${{ runner.temp }}/go-cache
 
     steps:
       # Must precede checkout: this action remounts the workspace volume.
@@ -100,31 +100,37 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          export ANDROID_TOP="$RUNNER_TEMP/android"
-          repo_metadata="$GITHUB_WORKSPACE/.repo"
+          # The Android source working tree is the large component (~93 GiB in run #37),
+          # so place it on the enlarged workspace LV. Put Repo's object database,
+          # Soong output, Go cache and ccache on the separate root filesystem.
+          export ANDROID_TOP="$GITHUB_WORKSPACE/android"
+          repo_metadata="$RUNNER_TEMP/android-repo-metadata"
           mkdir -p "$ANDROID_TOP" "$repo_metadata" "$ANDROID_TOP/.repo"
           if find "$repo_metadata" -mindepth 1 -maxdepth 1 -print -quit | grep -q .; then
-            echo "::error::Refusing to mount over a non-empty .repo metadata directory."
+            echo "::error::Refusing to mount over a non-empty Repo metadata directory."
             exit 1
           fi
           workspace_device="$(df --output=source "$GITHUB_WORKSPACE" | awk 'NR==2 {print $1}')"
-          android_device="$(df --output=source "$ANDROID_TOP" | awk 'NR==2 {print $1}')"
-          if [[ "$workspace_device" == "$android_device" ]]; then
-            echo "::error::Android worktree and .repo metadata must be on separate filesystems."
+          temp_device="$(df --output=source "$RUNNER_TEMP" | awk 'NR==2 {print $1}')"
+          if [[ "$workspace_device" == "$temp_device" ]]; then
+            echo "::error::Android source and Repo/build output must be on separate filesystems."
             exit 1
           fi
           sudo mount --bind "$repo_metadata" "$ANDROID_TOP/.repo"
           mountpoint -q "$ANDROID_TOP/.repo"
           echo "ANDROID_TOP=$ANDROID_TOP" >> "$GITHUB_ENV"
-          echo "Android worktree volume:"
+          echo "Android source working-tree volume:"
           df -hT "$ANDROID_TOP"
           echo "Repo metadata volume:"
           df -hT "$ANDROID_TOP/.repo"
-          mkdir -p "$OUT_DIR" "$TMPDIR" "$GOCACHE"
+          mkdir -p "$OUT_DIR" "$GOCACHE" "$CCACHE_DIR"
           echo "OUT_DIR=$OUT_DIR" >> "$GITHUB_ENV"
           echo "TMPDIR=$TMPDIR" >> "$GITHUB_ENV"
           echo "GOCACHE=$GOCACHE" >> "$GITHUB_ENV"
-          df -hT "$OUT_DIR" "$TMPDIR" "$GOCACHE"
+          echo "CCACHE_DIR=$CCACHE_DIR" >> "$GITHUB_ENV"
+          echo "TMPDIR uses short root path: $TMPDIR"
+          echo "Output/cache filesystem:"
+          df -hT "$OUT_DIR" "$GOCACHE" "$CCACHE_DIR" /
 
       - name: Configure optional compressed zram swap
         shell: bash
@@ -194,7 +200,7 @@ jobs:
       - name: Restore ccache
         uses: actions/cache/restore@v4
         with:
-          path: .ccache
+          path: ${{ runner.temp }}/.ccache
           key: deen-lineage19-ccache-${{ runner.os }}-${{ github.ref_name }}-${{ github.sha }}
           restore-keys: |
             deen-lineage19-ccache-${{ runner.os }}-${{ github.ref_name }}-
@@ -471,8 +477,8 @@ jobs:
           trap cleanup_monitor EXIT
 
           if [[ "$CLEAN_BUILD" == "true" ]]; then
-            echo "::warning::Clean build requested; removing out/."
-            rm -rf out
+            echo "::warning::Clean build requested; removing $OUT_DIR."
+            rm -rf "$OUT_DIR"
           fi
 
           echo "===== Phase 1/2: environment setup and Soong bootstrap ====="
@@ -498,7 +504,7 @@ jobs:
         if: always()
         uses: actions/cache/save@v4
         with:
-          path: .ccache
+          path: ${{ runner.temp }}/.ccache
           key: deen-lineage19-ccache-${{ runner.os }}-${{ github.ref_name }}-bootstrap-${{ github.sha }}
 
       - name: Build ROM
@@ -576,20 +582,21 @@ jobs:
           echo "Disk before build-space check:"
           du -sh .repo .repo/project-objects .repo/projects "$CCACHE_DIR" "$OUT_DIR" "$TMPDIR" "$GOCACHE" 2>/dev/null || true
           df -hT "$ANDROID_TOP" "$GITHUB_WORKSPACE" "$OUT_DIR" /
-          android_avail_kib="$(df --output=avail "$ANDROID_TOP" | awk 'NR==2 {print $1}')"
-          workspace_avail_kib="$(df --output=avail "$GITHUB_WORKSPACE" | awk 'NR==2 {print $1}')"
-          if (( workspace_avail_kib < 15 * 1024 * 1024 )); then
-            echo "::warning::Less than 15 GiB remain on the metadata/cache volume; clearing ccache only (not .repo/project-objects)."
+          source_avail_kib="$(df --output=avail "$ANDROID_TOP" | awk 'NR==2 {print $1}')"
+          out_avail_kib="$(df --output=avail "$OUT_DIR" | awk 'NR==2 {print $1}')"
+          if (( out_avail_kib < 55 * 1024 * 1024 )); then
+            echo "::warning::Less than 55 GiB remain on the build-output filesystem; clearing the 2 GiB ccache before compilation."
             ccache -C || true
-            workspace_avail_kib="$(df --output=avail "$GITHUB_WORKSPACE" | awk 'NR==2 {print $1}')"
+            out_avail_kib="$(df --output=avail "$OUT_DIR" | awk 'NR==2 {print $1}')"
           fi
-          if (( android_avail_kib < 30 * 1024 * 1024 )); then
-            android_avail_gib=$((android_avail_kib / 1024 / 1024))
-            echo "::error::Only ${android_avail_gib} GiB remain on the Android worktree/build volume. Need at least 30 GiB before compiling."
+          if (( source_avail_kib < 1024 * 1024 )); then
+            source_avail_gib=$((source_avail_kib / 1024 / 1024))
+            echo "::error::Only ${source_avail_gib} GiB remain on the Android source volume. At least 1 GiB is required to proceed safely."
             exit 1
           fi
-          if (( workspace_avail_kib < 8 * 1024 * 1024 )); then
-            echo "::error::The .repo/ccache volume has less than 8 GiB free; refusing to start compilation."
+          if (( out_avail_kib < 45 * 1024 * 1024 )); then
+            out_avail_gib=$((out_avail_kib / 1024 / 1024))
+            echo "::error::Only ${out_avail_gib} GiB remain on the Soong/build output volume. Need at least 45 GiB before compiling."
             exit 1
           fi
           echo "Disk before compiling ROM:"
@@ -633,7 +640,7 @@ jobs:
         if: always()
         uses: actions/cache/save@v4
         with:
-          path: .ccache
+          path: ${{ runner.temp }}/.ccache
           key: deen-lineage19-ccache-${{ runner.os }}-${{ github.ref_name }}-${{ github.sha }}
 
       - name: Upload ROM ZIP
